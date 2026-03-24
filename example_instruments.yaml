@@ -1,0 +1,69 @@
+instruments:
+  keithley_2400:
+    port: COM7
+    baudrate: 9600
+    timeout_s: 1.0
+    bytesize: 8
+    parity: "N"
+    stopbits: 1
+    read_termination: "\r"
+    write_termination: "\r"
+    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
+    output_on_cmd: "OUTP ON"
+    output_off_cmd: "OUTP OFF"
+    measure_current_cmd: "MEAS:CURR?"
+
+  keithley_e3631a_a:
+    port: COM5
+    baudrate: 9600
+    timeout_s: 1.0
+    bytesize: 8
+    parity: "N"
+    stopbits: 2
+    read_termination: "\r"
+    write_termination: "\r"
+    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
+    output_on_cmd: "OUTP ON"
+    output_off_cmd: "OUTP OFF"
+    measure_current_cmd: null
+
+  keithley_e3631a_b:
+    port: COM8
+    baudrate: 9600
+    timeout_s: 1.0
+    bytesize: 8
+    parity: "N"
+    stopbits: 2
+    read_termination: "\r"
+    write_termination: "\r"
+    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
+    output_on_cmd: "OUTP ON"
+    output_off_cmd: "OUTP OFF"
+    measure_current_cmd: null
+
+  bk_9132c:
+    port: COM6
+    baudrate: 9600
+    timeout_s: 1.0
+    bytesize: 8
+    parity: "N"
+    stopbits: 1
+    write_termination: "\r\n"
+    read_termination: "\n"
+    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
+    measure_current_cmd: null
+    output_on_cmd: "OUTP ON"
+    output_off_cmd: "OUTP OFF"
+
+assignments:
+  gate_source: keithley_e3631a_a
+  drain_source: keithley_2400
+  bulk_source: bk_9132c
+
+sweep:
+  gate_voltages_v: [0.0, 0.5, 1.0, 1.5]
+  drain_start_v: 0.0
+  drain_stop_v: 1.2
+  drain_step_v: 0.05
+  settle_s: 0.1
+  output_csv: data/iv_curve.csv

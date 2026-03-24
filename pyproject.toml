@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iv-measure"
+version = "0.1.0"
+description = "USB-to-RS232 instrument control for transistor I-V sweeps"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "I-V Lab" }
+]
+dependencies = [
+  "pyserial>=3.5,<4.0",
+  "PyYAML>=6.0,<7.0"
+]
+
+[project.scripts]
+iv-measure = "iv_measure.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
