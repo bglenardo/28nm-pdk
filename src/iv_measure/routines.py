@@ -170,6 +170,8 @@ def run_first_routine_from_csv(
     routines_csv: str | Path,
     routine_index: int = 0,
     point_callback: PointCallback | None = None,
+    confirm_initial_bias: bool = False,
+    ids_settle_s: float | None = None,
 ) -> tuple[RoutineSpec, list[RoutineMeasurement]]:
     routines = load_routines_csv(routines_csv)
     if routine_index < 0 or routine_index >= len(routines):
@@ -177,9 +179,13 @@ def run_first_routine_from_csv(
 
     first_routine = routines[routine_index]
     results: list[RoutineMeasurement] = []
+    effective_ids_settle_s = config.sweep.settle_s if ids_settle_s is None else float(ids_settle_s)
+    if effective_ids_settle_s < 0:
+        raise ValueError("ids_settle_s must be >= 0")
 
     device_pool, gate, drain, bulk = _open_device_pool(config)
     controls = _build_quantity_controls(config, gate, drain, bulk, device_pool)
+    current_biases: dict[str, float] = {}
 
     try:
         init_biases = {
@@ -190,8 +196,42 @@ def run_first_routine_from_csv(
             "vgxp": first_routine.vgxp_init,
             "vgxn": first_routine.vgxn_init,
         }
-        _apply_biases(controls, init_biases)
+        non_vgx_biases = {
+            quantity: value
+            for quantity, value in init_biases.items()
+            if quantity not in {"vgxp", "vgxn"}
+        }
+        vgx_biases = {
+            quantity: value
+            for quantity, value in init_biases.items()
+            if quantity in {"vgxp", "vgxn"}
+        }
+
+        _apply_changed_biases(controls, non_vgx_biases, current_biases)
         time.sleep(config.sweep.settle_s)
+
+        # Force vgxp/vgxn channels on at 0 V before ramping to their targets.
+        vgx_zero_biases = {quantity: 0.0 for quantity in vgx_biases}
+        _apply_changed_biases(controls, vgx_zero_biases, current_biases)
+        time.sleep(config.sweep.settle_s)
+
+        _ramp_biases(
+            controls=controls,
+            target_biases=vgx_biases,
+            duration_s=10.0,
+            steps=40,
+            current_biases=current_biases,
+        )
+        time.sleep(config.sweep.settle_s)
+
+        if confirm_initial_bias:
+            try:
+                input(
+                    "Initial voltages are applied. Verify rails and DUT state, then press Enter to start sweeps "
+                    "(Ctrl+C to abort): "
+                )
+            except EOFError:
+                print("No interactive stdin available; proceeding without confirmation pause.")
 
         step_values = linear_points(first_routine.step_start, first_routine.step_stop, first_routine.step_points)
         sweep_values = linear_points(first_routine.sweep_start, first_routine.sweep_stop, first_routine.sweep_points)
@@ -199,18 +239,18 @@ def run_first_routine_from_csv(
         for step_value in step_values:
             step_biases = dict(init_biases)
             step_biases[first_routine.step_param] = step_value
-            _apply_biases(controls, step_biases)
+            _apply_changed_biases(controls, step_biases, current_biases)
 
             for sweep_value in sweep_values:
                 biases = dict(step_biases)
                 biases[first_routine.sweep_param] = sweep_value
 
                 if first_routine.sweep_param != first_routine.step_param:
-                    _apply_biases(controls, {first_routine.sweep_param: sweep_value})
+                    _apply_changed_biases(controls, {first_routine.sweep_param: sweep_value}, current_biases)
                 else:
-                    _apply_biases(controls, {first_routine.step_param: sweep_value})
+                    _apply_changed_biases(controls, {first_routine.step_param: sweep_value}, current_biases)
 
-                time.sleep(config.sweep.settle_s)
+                time.sleep(effective_ids_settle_s)
                 drain_i = _measure_current_a(drain)
 
                 measurement = RoutineMeasurement(
@@ -449,13 +489,92 @@ def _apply_biases(
         if quantity not in biases:
             continue
         command = set_cmd.format(value=biases[quantity])
-        device.send_scpi(command)
-        _apply_bk9132c_set_fallback(device, command)
+        if _apply_bk9132c_set_direct(device, command):
+            pass
+        else:
+            device.send_scpi(command)
+            _apply_bk9132c_set_fallback(device, command)
         if _DEBUG_BK_READBACK and quantity in {"vgxp", "vgxn"}:
             _debug_bk9132c_readback(device, command, quantity)
         if _DEBUG_SET_CMDS_MAX > 0 and _DEBUG_SET_CMDS_COUNT < _DEBUG_SET_CMDS_MAX and quantity in {"Vg", "Vb", "Vd", "vgxp", "vgxn"}:
             print(f"DEBUG_SET {quantity} [{device.config.name}] -> {command}")
             _DEBUG_SET_CMDS_COUNT += 1
+
+
+def _apply_bk9132c_set_direct(device: SerialInstrument, applied_command: str) -> bool:
+    """Set BK 9132C channel voltage/current explicitly for more reliable channel updates."""
+    name = device.config.name.lower()
+    if "9132" not in name and "bk" not in name:
+        return False
+
+    match = re.fullmatch(
+        r"\s*APPL(?:Y)?\s+(CH[123])\s*,\s*([+-]?\d+(?:\.\d+)?)\s*,\s*([+-]?\d+(?:\.\d+)?)\s*",
+        applied_command,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return False
+
+    channel = match.group(1).upper()
+    voltage = match.group(2)
+    current = match.group(3)
+
+    # Keep global output on and explicitly program selected channel.
+    device.send_scpi("OUTP:STAT 1")
+    device.send_scpi(f"INST {channel}")
+    device.send_scpi(f"VOLT {voltage}")
+    device.send_scpi(f"CURR {current}")
+    device.send_scpi("CHAN:OUTP 1")
+    return True
+
+
+def _ramp_biases(
+    controls: dict[str, tuple[SerialInstrument, str]],
+    target_biases: dict[str, float],
+    duration_s: float,
+    steps: int,
+    current_biases: dict[str, float],
+) -> None:
+    ramp_quantities = [quantity for quantity in target_biases if quantity in controls]
+    if not ramp_quantities:
+        return
+    if steps < 1:
+        steps = 1
+
+    start_values = {
+        quantity: current_biases.get(quantity, 0.0)
+        for quantity in ramp_quantities
+    }
+
+    step_delay_s = duration_s / steps if duration_s > 0 else 0.0
+    for step in range(0, steps + 1):
+        fraction = step / steps
+        interpolated = {
+            quantity: start_values[quantity] + (target_biases[quantity] - start_values[quantity]) * fraction
+            for quantity in ramp_quantities
+        }
+        _apply_changed_biases(controls, interpolated, current_biases)
+        if step_delay_s > 0:
+            time.sleep(step_delay_s)
+
+
+def _apply_changed_biases(
+    controls: dict[str, tuple[SerialInstrument, str]],
+    requested_biases: dict[str, float],
+    current_biases: dict[str, float],
+    tolerance_v: float = 1e-9,
+) -> None:
+    changed: dict[str, float] = {}
+    for quantity, target in requested_biases.items():
+        previous = current_biases.get(quantity)
+        if previous is None or abs(previous - target) > tolerance_v:
+            changed[quantity] = target
+
+    if not changed:
+        return
+
+    _apply_biases(controls, changed)
+    current_biases.update(changed)
 
 
 def _apply_bk9132c_set_fallback(device: SerialInstrument, applied_command: str) -> None:
