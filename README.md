@@ -17,6 +17,27 @@ This project gives you a clean baseline for automating transistor I-V measuremen
 
 ```powershell
 py -3 -m venv .venv
+# Transistor I-V Measurement Starter
+
+This project provides a Python interface for transistor I-V measurements using instruments connected through USB-to-RS232 adapters.
+
+The main entry point for a single measurement routine is `run_first_routine.py`.
+
+## What the Python code does
+
+- Reads the instrument definitions from `instrument_list.yaml`
+- Loads one routine from a routine CSV file
+- Programs the configured gate, drain, and optional bulk/auxiliary sources
+- Sweeps the selected routine parameters and records `Ids`
+- Writes all measured points to CSV
+- Shows a live plot while running, unless disabled
+
+## Quick Start (Windows)
+
+1. Create a virtual environment:
+
+```powershell
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
 
@@ -27,78 +48,130 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-3. Edit serial settings and command strings in `instrument_list.yaml`:
-  - Define each physical instrument once under `instruments`
-  - Map logical roles like `gate_source`, `drain_source`, and `bulk_source` under `assignments`
-  - Set each instrument `port` value like `COM3`, `COM4`
-  - Replace command templates with the exact SCPI syntax your instruments expect
+3. Edit `instrument_list.yaml` so the ports and SCPI commands match your hardware.
 
-4. Run a sweep:
+4. Run a single routine with `run_first_routine.py`.
 
-```powershell
-iv-measure --config instrument_list.yaml
-```
+## Running `run_first_routine.py`
 
-Or run all routines from a CSV table:
+The script accepts a routine index and several optional settings.
+
+### Basic usage
 
 ```powershell
-iv-measure --config instrument_list.yaml --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" --output-csv data/nmos_routines.csv
+python run_first_routine.py --routine-index 0
 ```
 
-5. Check results in `data/iv_curve.csv`.
+### Copy/paste example
 
-## Config notes
+```powershell
+python run_first_routine.py `
+  --config instrument_list.yaml `
+  --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" `
+  --output-csv data/first_routine_measurements.csv `
+  --routine-index 0 `
+  --ids-settle-s 1.0
+```
 
-Each physical instrument now has its own YAML entry. The measurement code still works with logical roles through the `assignments` section.
+### Arguments
 
-Change SCPI command strings like:
+- `--config`
+  - Path to the instrument list YAML file.
+  - Default: `instrument_list.yaml`
+- `--routines-csv`
+  - Path to the routine definition CSV.
+  - Default: `Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv`
+- `--output-csv`
+  - Path where measured points are written.
+  - Default: `data/first_routine_measurements.csv`
+- `--routine-index`
+  - Zero-based index of the routine to run from the routine CSV.
+  - Default: `0`
+- `--no-live-plot`
+  - Disables the live matplotlib plot.
+- `--no-confirm-initial`
+  - Skips the manual confirmation pause after the initial voltages are applied.
+- `--ids-settle-s`
+  - Delay in seconds before each `Ids` measurement.
+  - Default: `1.0`
 
-- `set_voltage_cmd`
-- `measure_current_cmd`
-- `output_on_cmd`
-- `output_off_cmd`
+## Inputs
 
-`set_voltage_cmd` must include `{value}`.
+### 1. Instrument list YAML
 
-If your routines vary body bias (`Vb`), assign `bulk_source` to one of the configured instruments.
+The instrument list is the hardware configuration file consumed by the Python code.
 
-Example layout:
+It defines:
+
+- Each physical instrument and its serial port
+- The SCPI command strings used to program each instrument
+- Which logical measurement role each instrument plays
+
+The current file is [instrument_list.yaml](instrument_list.yaml).
+
+Important fields:
+
+- `instruments`
+  - Contains one entry per physical instrument
+- `type`
+  - Identifies the instrument family, such as `Keithley2400`, `E3631A`, or `9132C`
+- `port`
+  - The serial port, such as `COM5`, `COM6`, or `COM7`
+- `quantity` or `channel_map`
+  - Maps the instrument to logical roles like `Vg`, `Vd`, `Vb`, `vgxp`, and `vgxn`
+
+Example:
 
 ```yaml
 instruments:
-  keithley_2400: ...
-  keithley_e3631a_a: ...
-  keithley_e3631a_b: ...
-  bk_9132c: ...
-
-assignments:
-  gate_source: keithley_e3631a_a
-  drain_source: keithley_2400
-  bulk_source: bk_9132c
+  keithley_2400:
+    type: Keithley2400
+    port: COM7
+    quantity: Vd
+  keithley_e3631a_a:
+    type: E3631A
+    port: COM5
+    channel_map:
+      P6V: Vb
+      P25V: Vg
+      N25V: None
 ```
 
-## CSV routine mode
+### 2. Routine CSV file
 
-Routine CSV mode reads rows with these fields:
+The routine CSV tells the script which measurement to run and how to sweep it.
+
+The current routine file is [Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv](Routines/Cryo%20PDK%20DC%20measurement%20routines%20-%20nMOS%2028nm.csv).
+
+The script reads these columns:
 
 - `Measurement`
-- `Parameter to sweep`, `Sweep Start`, `Sweep Stop`, `Num Sweep Points`
-- `Parameter to Step`, `Step Start`, `Step Stop`, `Num Step Points`
-- `Vg Init`, `Vb Init`, `Vd Init`, `Vs Init`
+- `Parameter to sweep`
+- `Sweep Start`
+- `Sweep Stop`
+- `Num Sweep Points`
+- `Parameter to Step`
+- `Step Start`
+- `Step Stop`
+- `Num Step Points`
+- `Vg Init`
+- `Vb Init`
+- `Vd Init`
+- `Vs Init`
+- `vgxp Init`
+- `vgxn Init`
 
-Supported terminals are `Vs`, `Vd`, `Vg`, `Vb`.
+The `--routine-index` argument selects which row to run.
 
-For nMOS, the source is always grounded in execution. The runner enforces `Vs = 0 V` for every point.
+## Arduino requirement
 
-## Safety notes
+For now, the Arduino code must be loaded onto the board independently before running the Python scripts.
 
-- Start with low voltage/current limits on your instruments.
-- Confirm compliance/current limits manually before running automation.
-- Keep a hardware emergency stop path available.
+In other words:
 
-## Next upgrades
+1. Flash the Arduino separately using the code in [Arduino/](Arduino/)
+2. Verify the board is running the expected firmware
+3. Then run `run_first_routine.py` to operate the instruments
 
-- Add compliance trip detection
-- Add timestamp and temperature columns
-- Add per-point averaging and retries
-- Add plotting script for `ID-VDS` and `ID-VGS`
+The Python code does not upload Arduino firmware for you.
+

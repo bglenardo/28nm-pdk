@@ -19,7 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from iv_measure.config import load_project_config
 from iv_measure.e3631a import E3631A
-from iv_measure.routines import load_routines_csv, RoutineMeasurement, run_first_routine_from_csv, write_routine_measurements_csv
+from iv_measure.routines import load_routines_csv, RoutineMeasurement, run_single_routine_from_csv, write_routine_measurements_csv
 
 
 class LiveRoutinePlot:
@@ -245,7 +245,7 @@ def _enable_aux_fixed_e3631a(config_path: str | Path, in_use_ports: set[str]) ->
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run only the first routine from a measurement-routines CSV. "
+            "Run a single routine from a measurement-routines CSV. "
             "Applies init voltages first, then performs step/sweep points."
         )
     )
@@ -268,7 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--routine-index",
         type=int,
         default=0,
-        help="0-based routine index from the CSV to run (default: 0).",
+        help="0-based routine index from the CSV to run as the single routine (default: 0).",
     )
     parser.add_argument(
         "--no-live-plot",
@@ -317,7 +317,7 @@ def main() -> None:
     
     try:
         try:
-            routine, points = run_first_routine_from_csv(
+            routine, points = run_single_routine_from_csv(
                 config=config,
                 routines_csv=args.routines_csv,
                 routine_index=args.routine_index,

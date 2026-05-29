@@ -62,6 +62,8 @@ def load_routines_csv(path: str | Path) -> list[RoutineSpec]:
 
     with csv_path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
+        if reader.fieldnames is not None:
+            reader.fieldnames = [name.strip() if name is not None else name for name in reader.fieldnames]
         for row in reader:
             name = (row.get("Measurement") or "").strip()
             if not name:
@@ -165,7 +167,7 @@ def run_routines_from_csv(
     return results
 
 
-def run_first_routine_from_csv(
+def run_single_routine_from_csv(
     config: ProjectConfig,
     routines_csv: str | Path,
     routine_index: int = 0,
@@ -177,7 +179,7 @@ def run_first_routine_from_csv(
     if routine_index < 0 or routine_index >= len(routines):
         raise ValueError(f"routine_index {routine_index} out of range [0, {len(routines) - 1}]")
 
-    first_routine = routines[routine_index]
+    selected_routine = routines[routine_index]
     results: list[RoutineMeasurement] = []
     effective_ids_settle_s = config.sweep.settle_s if ids_settle_s is None else float(ids_settle_s)
     if effective_ids_settle_s < 0:
@@ -189,12 +191,12 @@ def run_first_routine_from_csv(
 
     try:
         init_biases = {
-            "Vg": first_routine.vg_init,
-            "Vd": first_routine.vd_init,
-            "Vb": first_routine.vb_init,
-            "Vs": first_routine.vs_init,
-            "vgxp": first_routine.vgxp_init,
-            "vgxn": first_routine.vgxn_init,
+            "Vg": selected_routine.vg_init,
+            "Vd": selected_routine.vd_init,
+            "Vb": selected_routine.vb_init,
+            "Vs": selected_routine.vs_init,
+            "vgxp": selected_routine.vgxp_init,
+            "vgxn": selected_routine.vgxn_init,
         }
         non_vgx_biases = {
             quantity: value
@@ -233,31 +235,31 @@ def run_first_routine_from_csv(
             except EOFError:
                 print("No interactive stdin available; proceeding without confirmation pause.")
 
-        step_values = linear_points(first_routine.step_start, first_routine.step_stop, first_routine.step_points)
-        sweep_values = linear_points(first_routine.sweep_start, first_routine.sweep_stop, first_routine.sweep_points)
+        step_values = linear_points(selected_routine.step_start, selected_routine.step_stop, selected_routine.step_points)
+        sweep_values = linear_points(selected_routine.sweep_start, selected_routine.sweep_stop, selected_routine.sweep_points)
 
         for step_value in step_values:
             step_biases = dict(init_biases)
-            step_biases[first_routine.step_param] = step_value
+            step_biases[selected_routine.step_param] = step_value
             _apply_changed_biases(controls, step_biases, current_biases)
 
             for sweep_value in sweep_values:
                 biases = dict(step_biases)
-                biases[first_routine.sweep_param] = sweep_value
+                biases[selected_routine.sweep_param] = sweep_value
 
-                if first_routine.sweep_param != first_routine.step_param:
-                    _apply_changed_biases(controls, {first_routine.sweep_param: sweep_value}, current_biases)
+                if selected_routine.sweep_param != selected_routine.step_param:
+                    _apply_changed_biases(controls, {selected_routine.sweep_param: sweep_value}, current_biases)
                 else:
-                    _apply_changed_biases(controls, {first_routine.step_param: sweep_value}, current_biases)
+                    _apply_changed_biases(controls, {selected_routine.step_param: sweep_value}, current_biases)
 
                 time.sleep(effective_ids_settle_s)
                 drain_i = _measure_current_a(drain)
 
                 measurement = RoutineMeasurement(
-                    routine=first_routine.name,
-                    step_param=first_routine.step_param,
+                    routine=selected_routine.name,
+                    step_param=selected_routine.step_param,
                     step_value_v=step_value,
-                    sweep_param=first_routine.sweep_param,
+                    sweep_param=selected_routine.sweep_param,
                     sweep_value_v=sweep_value,
                     vg_v=biases["Vg"],
                     vd_v=biases["Vd"],
@@ -278,7 +280,25 @@ def run_first_routine_from_csv(
             _force_bk9132c_off(device)
             device.close()
 
-    return first_routine, results
+    return selected_routine, results
+
+
+def run_first_routine_from_csv(
+    config: ProjectConfig,
+    routines_csv: str | Path,
+    routine_index: int = 0,
+    point_callback: PointCallback | None = None,
+    confirm_initial_bias: bool = False,
+    ids_settle_s: float | None = None,
+) -> tuple[RoutineSpec, list[RoutineMeasurement]]:
+    return run_single_routine_from_csv(
+        config=config,
+        routines_csv=routines_csv,
+        routine_index=routine_index,
+        point_callback=point_callback,
+        confirm_initial_bias=confirm_initial_bias,
+        ids_settle_s=ids_settle_s,
+    )
 
 
 def write_routine_measurements_csv(path: str | Path, points: list[RoutineMeasurement]) -> None:
