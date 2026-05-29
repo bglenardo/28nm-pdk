@@ -251,7 +251,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default="example_instruments.yaml",
+        default="instrument_list.yaml",
         help="Path to YAML instrument config.",
     )
     parser.add_argument(

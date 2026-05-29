@@ -11,7 +11,7 @@ import yaml
 # Allow running from repo root without editable install.
 import sys
 
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from iv_measure.e3631a import E3631A
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
             "then sweep Vb and Vg from 0 to 1 V in 5 steps."
         )
     )
-    parser.add_argument("--config", default="example_instruments.yaml", help="Path to YAML config.")
+    parser.add_argument("--config", default="instrument_list.yaml", help="Path to YAML config.")
     parser.add_argument("--settle-s", type=float, default=None, help="Override settle time in seconds.")
     return parser
 

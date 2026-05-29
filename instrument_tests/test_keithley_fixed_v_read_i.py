@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 # Allow running this script directly from repository root without pip install -e .
-REPO_ROOT = Path(__file__).resolve().parent
+REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from iv_measure.config import load_project_config
@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--config",
-        default="example_instruments.yaml",
+        default="instrument_list.yaml",
         help="Path to YAML instrument config.",
     )
     parser.add_argument(

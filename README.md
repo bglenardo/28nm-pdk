@@ -27,7 +27,7 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-3. Edit serial settings and command strings in `example_instruments.yaml`:
+3. Edit serial settings and command strings in `instrument_list.yaml`:
   - Define each physical instrument once under `instruments`
   - Map logical roles like `gate_source`, `drain_source`, and `bulk_source` under `assignments`
   - Set each instrument `port` value like `COM3`, `COM4`
@@ -36,13 +36,13 @@ pip install -e .
 4. Run a sweep:
 
 ```powershell
-iv-measure --config example_instruments.yaml
+iv-measure --config instrument_list.yaml
 ```
 
 Or run all routines from a CSV table:
 
 ```powershell
-iv-measure --config example_instruments.yaml --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" --output-csv data/nmos_routines.csv
+iv-measure --config instrument_list.yaml --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" --output-csv data/nmos_routines.csv
 ```
 
 5. Check results in `data/iv_curve.csv`.
