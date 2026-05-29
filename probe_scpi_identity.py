@@ -21,7 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ports",
         nargs="+",
-        default=["COM4", "COM5", "COM6", "COM7", "COM8"],
+        default=["COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8","COM9", "COM10", "COM11", "COM12"],
         help="Serial ports to probe.",
     )
     parser.add_argument(
@@ -33,15 +33,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=1.0,
+        default=0.5,
         help="Read timeout in seconds.",
     )
-    parser.add_argument(
-        "--exhaustive",
-        action="store_true",
-        help="Keep trying every configuration even after a port responds.",
-    )
     return parser
+
+
+def _query_scpi(connection: serial.Serial, command: str, terminator: str) -> str:
+    """Send a SCPI query and read the response. Return empty string on timeout or no response."""
+    try:
+        connection.reset_input_buffer()
+        connection.reset_output_buffer()
+        connection.write(f"{command}{terminator}".encode("ascii", errors="ignore"))
+        response = connection.read_until(terminator.encode("ascii", errors="ignore"))
+        return response.decode("ascii", errors="ignore").strip()
+    except (serial.SerialException, OSError):
+        return ""
 
 
 def probe_port(
@@ -59,19 +66,34 @@ def probe_port(
             stopbits=_serial_stopbits(config.stopbits),
             timeout=timeout,
         ) as connection:
-            connection.reset_input_buffer()
-            connection.reset_output_buffer()
-            connection.write(f"*IDN?{config.write_terminator}".encode("ascii", errors="ignore"))
-            response = connection.read_until(config.read_terminator.encode("ascii", errors="ignore"))
+            idn_text = _query_scpi(connection, "*IDN?", config.write_terminator)
+            if not idn_text:
+                return False, "no response"
+            
+            # Query serial number
+            # sn_text = _query_scpi(connection, ":SYST:SN?", config.write_terminator)
+            
+            # Query version/firmware
+            vers_text = _query_scpi(connection, "SYST:VERS?", config.write_terminator)
+            
+            # Query installed options
+            # opt_text = _query_scpi(connection, "*OPT?", config.write_terminator)
+            
+            # Try to query errors; fall back to *ESR? if SYST:ERR? fails
+            error_text = _query_scpi(connection, "SYST:ERR?", config.write_terminator)
+            
+            result = idn_text
+            if vers_text:
+                result += f" | VERS: {vers_text}"
+            # if opt_text:
+                # result += f" | OPT: {opt_text}"
+            if error_text:
+                result += f" | Error: {error_text}"
+            return True, result
     except serial.SerialException as exc:
-        return False, f"serial error: {exc}"
+        return False, f"serial error" # : {exc}"
     except OSError as exc:
         return False, f"os error: {exc}"
-
-    text = response.decode("ascii", errors="ignore").strip()
-    if not text:
-        return False, "no response"
-    return True, text
 
 
 def main() -> None:
@@ -85,7 +107,7 @@ def main() -> None:
     ]
 
     for port in args.ports:
-        matches: list[str] = []
+        first_match: str | None = None
         last_failure = "no response"
 
         for config in configs:
@@ -96,17 +118,16 @@ def main() -> None:
                 config=config,
             )
             if ok:
-                matches.append(f"{config.label} - {message}")
-                if not args.exhaustive:
-                    break
+                first_match = f"{config.label} - {message}"
+                break
             else:
                 last_failure = f"{config.label} - {message}"
 
-        if matches:
-            for match in matches:
-                print(f"{port}: OK - {match}")
+        if first_match is not None:
+            print(f"{port}: OK - {first_match}")
         else:
-            print(f"{port}: FAIL - {last_failure}")
+            if "serial error" not in last_failure:
+                print(f"{port}: FAIL - {last_failure}")
 
 
 def _serial_stopbits(value: float) -> float:

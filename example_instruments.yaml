@@ -1,6 +1,8 @@
 instruments:
   keithley_2400:
+    type: Keithley2400
     port: COM7
+    quantity: Vd
     baudrate: 9600
     timeout_s: 1.0
     bytesize: 8
@@ -8,40 +10,39 @@ instruments:
     stopbits: 1
     read_termination: "\r"
     write_termination: "\r"
-    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
-    output_on_cmd: "OUTP ON"
-    output_off_cmd: "OUTP OFF"
-    measure_current_cmd: "MEAS:CURR?"
+    current_compliance_a: 0.01
+    init_commands:
+      - "*RST"
+      - ":SOUR:FUNC VOLT"
+      - ":SENS:FUNC \"CURR\""
+      - ":SENS:CURR:PROT 0.01"
+      - ":SENS:CURR:RANG:AUTO ON"
+      - ":SYST:RSEN ON"
+      - ":TRIG:COUN 1"
+      - ":FORM:ELEM CURR"
 
   keithley_e3631a_a:
+    type: E3631A
     port: COM5
     baudrate: 9600
     timeout_s: 1.0
-    bytesize: 8
-    parity: "N"
-    stopbits: 2
-    read_termination: "\r"
-    write_termination: "\r"
-    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
-    output_on_cmd: "OUTP ON"
-    output_off_cmd: "OUTP OFF"
-    measure_current_cmd: null
+    channel_map:
+      P6V: Vb
+      P25V: Vg
+      N25V: None
 
   keithley_e3631a_b:
-    port: COM8
+    type: E3631A
+    port: COM10
     baudrate: 9600
     timeout_s: 1.0
-    bytesize: 8
-    parity: "N"
-    stopbits: 2
-    read_termination: "\r"
-    write_termination: "\r"
-    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
-    output_on_cmd: "OUTP ON"
-    output_off_cmd: "OUTP OFF"
-    measure_current_cmd: null
+    channel_map:
+      P6V: 0.9V
+      P25V: 1.8V
+      N25V: None
 
   bk_9132c:
+    type: 9132C
     port: COM6
     baudrate: 9600
     timeout_s: 1.0
@@ -50,20 +51,10 @@ instruments:
     stopbits: 1
     write_termination: "\r\n"
     read_termination: "\n"
-    set_voltage_cmd: "SOUR:VOLT {value:.6f}"
-    measure_current_cmd: null
-    output_on_cmd: "OUTP ON"
-    output_off_cmd: "OUTP OFF"
+    set_voltage_cmd: "APPL {channel}, {value:.6f}, {current_limit_a:.6f}"
+    current_limit_a: 0.1
+    channel_map:
+      CH1: vgxp
+      CH2: None
+      CH3: vgxn
 
-assignments:
-  gate_source: keithley_e3631a_a
-  drain_source: keithley_2400
-  bulk_source: bk_9132c
-
-sweep:
-  gate_voltages_v: [0.0, 0.5, 1.0, 1.5]
-  drain_start_v: 0.0
-  drain_stop_v: 1.2
-  drain_step_v: 0.05
-  settle_s: 0.1
-  output_csv: data/iv_curve.csv

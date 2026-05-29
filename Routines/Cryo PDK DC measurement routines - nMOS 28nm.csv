@@ -1,6 +1,6 @@
-Measurement,Parameter to sweep,Sweep Start,Sweep Stop,Num Sweep Points,Parameter to Step,Step Start,Step Stop,Num Step Points,Vg Init,Vb Init,Vd Init,Vs Init,
-Output WO Bulk,Vd,0,0.9,100,Vg,0,0.9,10,0,0,0,0,
-Output W Bulk,Vd,0,0.9,100,Vg,0,0.9,10,0,-0.9,0,0,Note: can not do this on the 28nm devices except for the deep N well
-Transfer Saturation,Vg,0,0.9,100,Vb,-0.9,0,10,0,-0.9,0.9,0,"Note: can not vary Vb, so this measurement will only have a single curve at Vb=0 (except for deep N well)"
-Transfer Linear,Vg,0,0.9,100,Vb,-0.9,0,10,0,-0.9,0.1,0,"Note: can not vary Vb, so this measurement will only have a single curve at Vb=0 (except for deep N well)"
-Accumulation to Inversion,Vg,0,0.9,100,Vd,0.25,0.9,10,0,0,0.25,0,
+Measurement,Parameter to sweep,Sweep Start,Sweep Stop,Num Sweep Points,Parameter to Step,Step Start,Step Stop,Num Step Points,Vg Init,Vb Init,Vd Init,Vs Init,vgxp Init,vgxn Init,
+Output WO Bulk,Vd,0.7,0.7,1,Vg,0.0,0.8,20,0,0,0,0,0.95,0.05,
+Output W Bulk,Vd,0,0.9,100,Vg,0,0.9,10,0,-0.9,0,0,0.95,0.05,Note: can not do this on the 28nm devices except for the deep N well
+Transfer Saturation,Vg,0,0.9,100,Vb,-0.9,0,10,0,-0.9,0.9,0,0.95,0.05,"Note: can not vary Vb, so this measurement will only have a single curve at Vb=0 (except for deep N well)"
+Transfer Linear,Vg,0,0.9,100,Vb,-0.9,0,10,0,-0.9,0.1,0,0.95,0.05,"Note: can not vary Vb, so this measurement will only have a single curve at Vb=0 (except for deep N well)"
+Accumulation to Inversion,Vg,0,0.9,100,Vd,0.25,0.9,10,0,0,0.25,0,0.95,0.05,

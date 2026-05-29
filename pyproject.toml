@@ -13,7 +13,8 @@ authors = [
 ]
 dependencies = [
   "pyserial>=3.5,<4.0",
-  "PyYAML>=6.0,<7.0"
+  "PyYAML>=6.0,<7.0",
+  "matplotlib>=3.8,<4.0"
 ]
 
 [project.scripts]
