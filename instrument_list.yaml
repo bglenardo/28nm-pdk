@@ -11,15 +11,6 @@ instruments:
     read_termination: "\r"
     write_termination: "\r"
     current_compliance_a: 0.01
-    init_commands:
-      - "*RST"
-      - ":SOUR:FUNC VOLT"
-      - ":SENS:FUNC \"CURR\""
-      - ":SENS:CURR:PROT 0.01"
-      - ":SENS:CURR:RANG:AUTO ON"
-      - ":SYST:RSEN ON"
-      - ":TRIG:COUN 1"
-      - ":FORM:ELEM CURR"
 
   keithley_e3631a_a:
     type: E3631A
@@ -36,6 +27,7 @@ instruments:
     port: COM10
     baudrate: 9600
     timeout_s: 1.0
+    # Manual-only rails; software intentionally does not drive these fixed channels.
     channel_map:
       P6V: 0.9V
       P25V: 1.8V
@@ -43,7 +35,7 @@ instruments:
 
   bk_9132c:
     type: 9132C
-    port: COM6
+    port: None
     baudrate: 9600
     timeout_s: 1.0
     bytesize: 8
@@ -53,8 +45,9 @@ instruments:
     read_termination: "\n"
     set_voltage_cmd: "APPL {channel}, {value:.6f}, {current_limit_a:.6f}"
     current_limit_a: 0.1
+    # BK is disabled for routines in this setup.
     channel_map:
-      CH1: vgxp
+      CH1: None
       CH2: None
-      CH3: vgxn
+      CH3: None
 

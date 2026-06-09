@@ -21,6 +21,7 @@ class SerialDeviceConfig:
     write_termination: str = "\r"
     set_voltage_cmd: str = "SOUR:VOLT {value:.6f}"
     init_commands: tuple[str, ...] = ()
+    current_compliance_a: float | None = None
     measure_current_cmd: str | None = "MEAS:CURR?"
     output_on_cmd: str | None = "OUTP ON"
     output_off_cmd: str | None = "OUTP OFF"
@@ -319,6 +320,11 @@ def _parse_keithley2400(instrument_name: str, raw: dict[str, Any]) -> SerialDevi
     if "port" not in raw:
         raise ValueError(f"instruments.{instrument_name}.port is required")
 
+    from iv_measure.keithley2400 import build_voltage_source_init_commands
+
+    current_compliance_a = float(raw.get("current_compliance_a", 0.01))
+    init_commands = build_voltage_source_init_commands(current_compliance_a=current_compliance_a)
+
     return SerialDeviceConfig(
         name=instrument_name,
         port=str(raw["port"]),
@@ -330,7 +336,8 @@ def _parse_keithley2400(instrument_name: str, raw: dict[str, Any]) -> SerialDevi
         read_termination=str(raw.get("read_termination", "\\r")),
         write_termination=str(raw.get("write_termination", "\\r")),
         set_voltage_cmd=str(raw.get("set_voltage_cmd", ":SOUR:VOLT {value:.6f}")),
-        init_commands=tuple(_str_list(raw.get("init_commands", []))),
+        init_commands=init_commands,
+        current_compliance_a=current_compliance_a,
         measure_current_cmd=str(raw.get("measure_current_cmd", ":MEAS:CURR?")),
         output_on_cmd=str(raw.get("output_on_cmd", "OUTP ON")),
         output_off_cmd=str(raw.get("output_off_cmd", "OUTP OFF")),

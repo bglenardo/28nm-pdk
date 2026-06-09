@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import math
 import re
 import sys
@@ -19,6 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from iv_measure.config import load_project_config
 from iv_measure.e3631a import E3631A
+from iv_measure.keithley2400 import build_voltage_source_init_commands
 from iv_measure.routines import load_routines_csv, RoutineMeasurement, run_single_routine_from_csv, write_routine_measurements_csv
 
 
@@ -186,8 +188,8 @@ def _enable_aux_fixed_e3631a(config_path: str | Path, in_use_ports: set[str]) ->
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run routines from a measurement-routines CSV. "
-            "By default runs all routines; use --routine-index to run one."
+            "Run a single routine from a measurement-routines CSV. "
+            "Applies init voltages first, then performs step/sweep points."
         )
     )
     parser.add_argument(
@@ -208,8 +210,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--routine-index",
         type=int,
-        default=None,
-        help="0-based routine index from the CSV to run. If omitted, all routines are run.",
+        default=0,
+        help="0-based routine index from the CSV to run as the single routine (default: 0).",
     )
     parser.add_argument(
         "--no-live-plot",
@@ -220,6 +222,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-confirm-initial",
         action="store_true",
         help="Do not pause for user confirmation after initial voltages are applied.",
+    )
+    parser.add_argument(
+        "--four-wire",
+        action="store_true",
+        help="Use Keithley remote sense for the drain source and cap the source range at 2 V.",
     )
     parser.add_argument(
         "--ids-settle-s",
@@ -234,13 +241,23 @@ def main() -> None:
     args = build_parser().parse_args()
 
     config = load_project_config(args.config)
+    if config.drain_source.name == "keithley_2400":
+        current_compliance_a = config.drain_source.current_compliance_a or 0.01
+        init_commands = build_voltage_source_init_commands(
+            current_compliance_a=current_compliance_a,
+            remote_sense=args.four_wire,
+            source_voltage_range_v=2.0,
+        )
+        config = replace(config, drain_source=replace(config.drain_source, init_commands=init_commands))
     routine_specs = load_routines_csv(args.routines_csv)
-    if args.routine_index is None:
-        routine_indices = list(range(len(routine_specs)))
-    else:
-        if args.routine_index < 0 or args.routine_index >= len(routine_specs):
-            raise ValueError(f"routine_index {args.routine_index} out of range [0, {len(routine_specs) - 1}]")
-        routine_indices = [args.routine_index]
+    if args.routine_index < 0 or args.routine_index >= len(routine_specs):
+        raise ValueError(f"routine_index {args.routine_index} out of range [0, {len(routine_specs) - 1}]")
+    selected_routine = routine_specs[args.routine_index]
+    live_plot = None if args.no_live_plot else LiveRoutinePlot(
+        routine_name=selected_routine.name,
+        step_param=selected_routine.step_param,
+        sweep_param=selected_routine.sweep_param,
+    )
     
     # Reset/close any lingering connections on the ports
     ports_to_reset = [config.gate_source.port, config.drain_source.port]
@@ -254,45 +271,33 @@ def main() -> None:
 
     aux_supplies = _enable_aux_fixed_e3631a(args.config, set(ports_to_reset))
     
-    all_points: list[RoutineMeasurement] = []
-    completed: list[tuple[int, str, int]] = []
-
     try:
-        for order, routine_index in enumerate(routine_indices):
-            selected_routine = routine_specs[routine_index]
-            live_plot = None if args.no_live_plot else LiveRoutinePlot(
-                routine_name=selected_routine.name,
-                step_param=selected_routine.step_param,
-                sweep_param=selected_routine.sweep_param,
-            )
-            try:
-                routine, points = run_single_routine_from_csv(
-                    config=config,
-                    routines_csv=args.routines_csv,
-                    routine_index=routine_index,
-                    point_callback=None if live_plot is None else live_plot.update,
-                    confirm_initial_bias=(not args.no_confirm_initial and order == 0),
-                    ids_settle_s=args.ids_settle_s,
-                )
-            finally:
-                if live_plot is not None:
-                    live_plot.finalize()
-
-            all_points.extend(points)
-            completed.append((routine_index, routine.name, len(points)))
-
-        write_routine_measurements_csv(args.output_csv, all_points)
+        routine, points = run_single_routine_from_csv(
+            config=config,
+            routines_csv=args.routines_csv,
+            routine_index=args.routine_index,
+            point_callback=None if live_plot is None else live_plot.update,
+            confirm_initial_bias=not args.no_confirm_initial,
+            ids_settle_s=args.ids_settle_s,
+        )
+        write_routine_measurements_csv(args.output_csv, points)
     finally:
         for supply in aux_supplies:
             try:
                 supply.output_off()
             finally:
                 supply.close()
+        if live_plot is not None:
+            live_plot.finalize()
 
-    print(f"Routines run: {len(completed)}")
-    for routine_index, routine_name, point_count in completed:
-        print(f"  - index {routine_index}: {routine_name} ({point_count} points)")
-    print(f"Points total: {len(all_points)}")
+    print(f"Routine index: {args.routine_index}")
+    print(f"Routine: {routine.name}")
+    print(
+        "Sweep/Step: "
+        f"{routine.sweep_param} {routine.sweep_start}->{routine.sweep_stop} ({routine.sweep_points}), "
+        f"{routine.step_param} {routine.step_start}->{routine.step_stop} ({routine.step_points})"
+    )
+    print(f"Points: {len(points)}")
     print(f"Saved: {args.output_csv}")
 
 

@@ -21,7 +21,7 @@ py -3 -m venv .venv
 
 This project provides a Python interface for transistor I-V measurements using instruments connected through USB-to-RS232 adapters.
 
-The main entry point for a single measurement routine is `run_first_routine.py`.
+The main entry point for a single measurement routine is `run_routine.py`.
 
 ## What the Python code does
 
@@ -50,22 +50,23 @@ pip install -e .
 
 3. Edit `instrument_list.yaml` so the ports and SCPI commands match your hardware.
 
-4. Run a single routine with `run_first_routine.py`.
+4. Run a single routine with `run_routine.py`.
 
-## Running `run_first_routine.py`
+## Running `run_routine.py`
 
 The script accepts a routine index and several optional settings.
+By default it uses a simpler two-wire drain measurement. Pass `--four-wire` to enable remote sense.
 
 ### Basic usage
 
 ```powershell
-python run_first_routine.py --routine-index 0
+python run_routine.py --routine-index 0
 ```
 
 ### Copy/paste example
 
 ```powershell
-python run_first_routine.py `
+python run_routine.py `
   --config instrument_list.yaml `
   --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" `
   --output-csv data/first_routine_measurements.csv `
@@ -91,6 +92,8 @@ python run_first_routine.py `
   - Disables the live matplotlib plot.
 - `--no-confirm-initial`
   - Skips the manual confirmation pause after the initial voltages are applied.
+- `--four-wire`
+  - Enables Keithley remote sense for the drain source and caps the source range at 2 V.
 - `--ids-settle-s`
   - Delay in seconds before each `Ids` measurement.
   - Default: `1.0`
@@ -171,7 +174,7 @@ In other words:
 
 1. Flash the Arduino separately using the code in [Arduino/](Arduino/)
 2. Verify the board is running the expected firmware
-3. Then run `run_first_routine.py` to operate the instruments
+3. Then run `run_routine.py` to operate the instruments
 
 The Python code does not upload Arduino firmware for you.
 

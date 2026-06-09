@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Leave output on after measurement (default is to turn output off).",
     )
+    parser.add_argument(
+        "--four-wire",
+        action="store_true",
+        help="Enable remote sense and measure the sensed voltage as well as current.",
+    )
     return parser
 
 
@@ -70,9 +75,11 @@ def main() -> None:
         stopbits=drain_cfg.stopbits,
         write_termination=drain_cfg.write_termination,
         read_termination=drain_cfg.read_termination,
+        current_compliance_a=args.current_compliance_a,
+        remote_sense=args.four_wire,
+        source_voltage_range_v=2.0,
     ) as k2400:
         print(f"Connected to: {k2400.identify()}")
-        k2400.reset()
         k2400.source_voltage(args.voltage, args.current_compliance_a)
         k2400.output_on()
 
@@ -80,6 +87,10 @@ def main() -> None:
         measured_i_a = k2400.measure_source_current()
         print(f"Set Vd = {args.voltage:.6f} V")
         print(f"Measured Ids = {measured_i_a:.12g} A")
+
+        if args.four_wire:
+            measured_v_v = k2400.measure_sense_voltage()
+            print(f"Measured Vsense = {measured_v_v:.12g} V")
 
         if args.leave_on:
             print("Leaving Keithley output ON (--leave-on).")
