@@ -275,7 +275,7 @@ void setup() {
   timingTest(200);
 
   // Real configuration + full chain shift with logging
-  configureDevice(1, 1, 15); // (flavor, row, col)
+  configureDevice(1, 0, 14); // (flavor, row, col)
 
   while (true) {}
 }
