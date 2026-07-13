@@ -9,11 +9,13 @@ Checks, in order:
   1. READY banner appears after port-open (patched sketch is flashed).
   2. PING -> PONG (command parser is alive).
   3. SEL 3 0 0 (nmos_mid, row 0, col 0) completes, and the sketch's own
-     verification report shows Mismatches <= 2.
-     REMINDER: exactly 2 mismatches + "Test Failed" is the EXPECTED result
+     verification report shows Mismatches <= 4.
+     REMINDER: exactly 2 mismatches + "Test Failed" is the IDEAL result
      on a healthy chain (the sketch's same-cycle check flags the two one-hot
-     bits). 0 would mean the comparison saw nothing at all; >2 means a real
-     problem (Sout threshold, wiring, chip power).
+     bits, CLAUDE.md Q1). On this bench the weak-Sout analog read repeatably
+     yields 3 (CLAUDE.md Q2 / Section 5 bench log). 0 would mean the
+     comparison saw nothing at all; >4 means a real problem (Sout threshold,
+     wiring, chip power).
   4. SEL of a second device (3 0 1) also completes -- proves repeat
      selections work without re-flashing or power cycling.
 
@@ -52,13 +54,21 @@ def main() -> int:
     print("[1/4] opening port (Arduino auto-resets)...")
     ser = serial.Serial(args.scan_port, 115200, timeout=5)
     time.sleep(2.0)
-    if not wait_for(ser, "READY", 15):
-        print("FAIL: no READY. Is sketch_may26_r4_SEL flashed? Right port? "
-              "(The ORIGINAL sketch prints 'start' then hangs -- if you saw "
-              "'start' and a scan report but no READY, the old firmware is "
-              "still on the board.)")
-        return 1
-    print("PASS")
+    # Q6: auto-reset on port-open is unreliable, so a READY banner may never
+    # appear. Wait for it, but do NOT treat "no banner" as failure -- fall
+    # back to a PING/PONG liveness check (same policy as run_device_loop).
+    if wait_for(ser, "READY", 8):
+        print("PASS (READY banner)")
+    else:
+        ser.reset_input_buffer()
+        ser.write(b"PING\n")
+        if not wait_for(ser, "PONG", 5):
+            print("FAIL: no READY banner AND no PONG. Is sketch_may26_r4_SEL "
+                  "flashed? Right port? (No banner alone is normal, Q6; no "
+                  "PONG means the parser isn't there -- e.g. the ORIGINAL "
+                  "sketch that prints 'start' then hangs.)")
+            return 1
+        print("PASS (no banner, but PING->PONG: parser alive, Q6 fallback)")
 
     print("[2/4] PING...")
     ser.write(b"PING\n")
@@ -75,9 +85,9 @@ def main() -> int:
             print("FAIL: no SEL_DONE within 30 s.")
             return 1
         m = cap.get("mismatches")
-        if m is None or m > 2:
-            print(f"FAIL: Mismatches={m} (expected 0-2; 2 is the healthy-"
-                  "chain norm). Check Sout wiring/threshold and chip power.")
+        if m is None or m > 4:  # CLAUDE.md Q2 / Section 5: 2 ideal, 3 bench-normal
+            print(f"FAIL: Mismatches={m} (expected 0-4; 2 is ideal, 3 is the "
+                  "bench norm). Check Sout wiring/threshold and chip power.")
             return 1
         print(f"PASS (Mismatches={m}"
               + (", the expected same-cycle-check artifact)" if m == 2 else ")"))

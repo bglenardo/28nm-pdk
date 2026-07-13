@@ -2,3 +2,15 @@ __pycache__/
 *.pyc
 .venv/
 data/*.csv
+
+# Bench measurement run outputs are reproducible; keep them local. The folder
+# structure (.gitkeep) and the curated diagnostics_* evidence ARE tracked.
+data/chip_one/**/*.csv
+data/chip_one/**/*.png
+data/chip_two/**/*.csv
+data/chip_two/**/*.png
+data/one_device/**
+data/*.png
+
+# Large datasheet PDF — kept locally, not in git.
+docs/*.pdf
