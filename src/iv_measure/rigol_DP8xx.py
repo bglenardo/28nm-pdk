@@ -24,6 +24,11 @@ class RigolDP8xx:
     timeout_ms: int = 5000
     resource_manager: pyvisa.ResourceManager | None = None
 
+    # Tracks which channels have been turned on via apply()/output_on(), so
+    # callers can cleanly turn off every enabled channel during cleanup
+    # without needing to track that state externally themselves.
+    enabled_channels: set[RigolChannel] = field(default_factory=set, init=False)
+    
     def __post_init__(self) -> None:
         # Allow an external ResourceManager to be shared/injected (e.g. so a
         # caller can list/reuse one instance across multiple instruments);

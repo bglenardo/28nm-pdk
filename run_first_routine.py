@@ -201,7 +201,7 @@ def _enable_aux_fixed_rigol(config_path: str | Path, in_use_resources: set[str])
             continue
 
         # Only consider entries explicitly typed as "RigolDP8xx".
-        if str(cfg.get("type", "")).strip().upper() != "RIGOLDP8XX":
+        if str(cfg.get("type", "")).strip().upper() != "RIGOLDP8xx":
             continue
 
         resource_name = str(cfg.get("resource_name", "")).strip()
@@ -254,6 +254,7 @@ def _enable_aux_fixed_rigol(config_path: str | Path, in_use_resources: set[str])
             # unlike E3631A where output_on() is a separate, single
             # whole-instrument call made once up front.
             supply.apply(channel, fixed_v, current_limit_a)
+            supply._aux_enabled_channels.append(channel)
             print(f"Set fixed supply {name} {channel} = {fixed_v:.3f} V")
 
         print(f"Enabled auxiliary Rigol {name} on {resource_name}")
@@ -440,7 +441,7 @@ def main() -> None:
 
     # Turn on any auxiliary fixed-voltage E3631A channels that aren't part
     # of the main routine sources.
-    aux_supplies = _enable_aux_fixed_e3631a(args.config, set(ports_to_reset))
+    aux_supplies = _enable_aux_fixed_rigol(args.config, set())
     
     all_points: list[RoutineMeasurement] = []
     completed: list[tuple[int, str, int]] = []
@@ -485,7 +486,8 @@ def main() -> None:
         # something above failed, to avoid leaving voltages applied.
         for supply in aux_supplies:
             try:
-                supply.output_off()
+                for channel in getattr(supply, "_aux_enabled_channels", []):
+                    supply.output_off(channel)
             finally:
                 supply.close()
                  
