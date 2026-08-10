@@ -447,7 +447,7 @@ def main() -> None:
 
     try:
         for order, routine_index in enumerate(routine_indices):
-            selected_routine = routine_specs[routine_index]\
+            selected_routine = routine_specs[routine_index]
 
             # Setup live plot for routine unless disabled by user flag
             live_plot = None if args.no_live_plot else LiveRoutinePlot(
