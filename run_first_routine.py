@@ -23,10 +23,18 @@ from iv_measure.routines import load_routines_csv, RoutineMeasurement, run_singl
 
 
 class LiveRoutinePlot:
+     """
+    Manages a live-updating matplotlib figure with two subplots
+    (linear-scale and log-scale Ids vs Vds) that get redrawn as new
+    measurement points arrive during a routine. Object with functions to add lines and x/y data
+    """
     def __init__(self, routine_name: str, step_param: str, sweep_param: str) -> None:
+        # Turn on interactive mode so the plot updates without blocking execution.
         plt.ion()
         self._figure, (self._vds_linear_ax, self._vds_log_ax) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 
+        # setup to store one Line2D object per step value (e.g. one line per vds step),
+        # plus the raw x/y data backing each line so we can append to it.
         self._vds_linear_lines: dict[float, Line2D] = {}
         self._vds_log_lines: dict[float, Line2D] = {}
         self._vds_x_data: dict[float, list[float]] = {}
@@ -35,11 +43,13 @@ class LiveRoutinePlot:
         self._step_param = step_param
         self._sweep_param = sweep_param
 
+        # Configure the linear-scale subplot.
         self._vds_linear_ax.set_title(f"{routine_name} Ids vs Vds (Linear)")
         self._vds_linear_ax.set_xlabel(f"{sweep_param} (V)")
         self._vds_linear_ax.set_ylabel("Drain current (A)")
         self._vds_linear_ax.grid(True, alpha=0.3)
 
+        # Configure the log-scale subplot (useful for viewing subthreshold current).
         self._vds_log_ax.set_title(f"{routine_name} Ids vs Vds (Log)")
         self._vds_log_ax.set_xlabel(f"{sweep_param} (V)")
         self._vds_log_ax.set_ylabel("Drain current (A)")
@@ -47,9 +57,16 @@ class LiveRoutinePlot:
         self._vds_log_ax.grid(True, which="both", alpha=0.3)
 
     def update(self, point: RoutineMeasurement) -> None:
+        """
+        Called once per new measurement point. Adds the point to the
+        appropriate step-value line (creating the line if needed) and
+        redraws the figure.
+        """
         step_value = point.step_value_v
         vds_linear_line = self._vds_linear_lines.get(step_value)
         vds_log_line = self._vds_log_lines.get(step_value)
+
+        # First time we see this step value, create a new line/legend entry for it.
         if vds_linear_line is None or vds_log_line is None:
             (vds_linear_line,) = self._vds_linear_ax.plot([], [], marker="o", linewidth=1.5, markersize=4, label=f"{self._step_param}={step_value:.3f} V")
             (vds_log_line,) = self._vds_log_ax.plot([], [], marker="o", linewidth=1.5, markersize=4, label=f"{self._step_param}={step_value:.3f} V")
@@ -60,12 +77,19 @@ class LiveRoutinePlot:
             self._vds_linear_ax.legend(loc="best")
             self._vds_log_ax.legend(loc="best")
 
+        
+        # Append the new data point to this step's series.
         self._vds_x_data[step_value].append(point.sweep_value_v)
         self._vds_y_data[step_value].append(point.drain_i_a)
         vds_linear_line.set_data(self._vds_x_data[step_value], self._vds_y_data[step_value])
+
+        # Log scale can't plot non-positive values, so replace them with NaN
+        # (matplotlib simply skips NaN points, keeping the line continuous elsewhere).
         vds_log_y_data = [value if value > 0 else math.nan for value in self._vds_y_data[step_value]]
         vds_log_line.set_data(self._vds_x_data[step_value], vds_log_y_data)
 
+        # Rescale axes to fit new data, then force a redraw/flush so the
+        # window actually updates on screen during the blocking measurement loop.
         self._vds_linear_ax.relim()
         self._vds_linear_ax.autoscale_view()
         self._vds_log_ax.relim()
@@ -75,7 +99,13 @@ class LiveRoutinePlot:
         self._figure.canvas.flush_events()
         plt.pause(0.001)
 
+    
     def _ensure_log_limits(self) -> None:
+        """
+        Manually set y-limits for the log plot based on the min/max positive
+        values seen so far, since autoscale_view doesn't always behave well
+        with log axes when data spans many decades.
+        """
         vds_positive_values = [
             value
             for values in self._vds_y_data.values()
@@ -92,13 +122,20 @@ class LiveRoutinePlot:
             self._vds_log_ax.set_ylim(vds_lower, vds_upper)
 
     def finalize(self) -> None:
+        """Switch off interactive mode and block on the figure so the user can inspect it after the routine finishes."""
         if plt.fignum_exists(self._figure.number):
             plt.ioff()
             plt.show(block=True)
 
 
 def reset_serial_ports(ports: list[str]) -> None:
-    """Attempt to close any open connections on the given ports to reset them."""
+    """
+    Attempt to close any open connections on the given ports to reset them.
+
+    Opening and immediately closing each port (with buffers flushed) helps
+    clear stale connections left over from a previous run/crash, particularly
+    on Windows where serial handles can linger.
+    """
     for port in ports:
         try:
             ser = serial.Serial(port, timeout=0.1)
@@ -112,6 +149,11 @@ def reset_serial_ports(ports: list[str]) -> None:
 
 
 def _parse_voltage_literal(text: str) -> float | None:
+    """
+    Parse a string like "1.8", "1.8V", or "-0.5 v" into a float voltage.
+    Returns None if the text doesn't match a plain numeric voltage literal
+    (e.g. it's a symbolic name like "Vg" instead).
+    """
     match = re.fullmatch(r"\s*([+-]?\d+(?:\.\d+)?)\s*[vV]?\s*", text)
     if not match:
         return None
@@ -119,6 +161,11 @@ def _parse_voltage_literal(text: str) -> float | None:
 
 
 def _is_manual_supply_rail(voltage_v: float) -> bool:
+     """
+    Identify voltages that correspond to rails intended to be set manually
+    (e.g. 0.9 V / 1.8 V logic rails) rather than driven automatically by
+    this script.
+    """
     return abs(voltage_v - 0.9) <= 1e-6 or abs(voltage_v - 1.8) <= 1e-6
 
 
