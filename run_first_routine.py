@@ -201,7 +201,7 @@ def _enable_aux_fixed_rigol(config_path: str | Path, in_use_resources: set[str])
             continue
 
         # Only consider entries explicitly typed as "RigolDP8xx".
-        if str(cfg.get("type", "")).strip().upper() != "RIGOLDP8XX":
+        if str(cfg.get("type", "")).strip().upper() != "RIGOLDP8xx":
             continue
 
         resource_name = str(cfg.get("resource_name", "")).strip()
