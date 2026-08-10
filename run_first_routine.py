@@ -170,48 +170,84 @@ def _is_manual_supply_rail(voltage_v: float) -> bool:
 
 
 def _enable_aux_fixed_e3631a(config_path: str | Path, in_use_ports: set[str]) -> list[E3631A]:
-    """Enable fixed-voltage channels on E3631As not already opened by routine sources."""
+     """
+    Enable fixed-voltage channels on any E3631A (E3631A is a triple-output DC power supply made by Keysight (formerly Agilent/HP)) supplies defined in the config
+    that are NOT already opened as routine sources (gate/drain/bulk/quantity
+    sources). This lets auxiliary supply rails (e.g. bias voltages unrelated
+    to the swept parameters) get turned on automatically alongside the main
+    routine sources.
+
+    Returns the list of opened E3631A instances so the caller can turn them
+    off and close them when done.
+    """
+     # Load the entire instrument config YAML file into a plain dict.
     raw = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         return []
 
+    # Pull out the "instruments" section, which should map instrument
+    # names to their individual config dicts.
     instruments = raw.get("instruments")
     if not isinstance(instruments, dict):
         return []
 
     opened: list[E3631A] = []
+
+     # Iterate over every instrument entry defined in the config file.
     for name, cfg in instruments.items():
         if not isinstance(cfg, dict):
+             # Skip malformed entrie
             continue
+             
+        # Only consider E3631A entries
         if str(cfg.get("type", "")).strip().upper() != "E3631A":
             continue
 
         port = str(cfg.get("port", "")).strip()
+        # Skip if this port is already claimed by a routine source (gate/drain/etc.)
         if not port or port in in_use_ports:
             continue
 
+        # channel_map tells us what each physical output channel
+        # (e.g. "P6V", "P25V", "N25V") is being used for.
         channel_map = cfg.get("channel_map")
         if not isinstance(channel_map, dict):
             continue
 
+        # Here a current limit to apply to every fixed channel on this supply
+        # (defaults to 0.1 A if not specified in config).
         current_limit_a = float(cfg.get("current_limit_a", 0.1))
+
+         # Fixed_channels are power supply channels whose voltage is meant to be set once and left alone.
         fixed_channels: list[tuple[str, float]] = []
         for channel, mapped in channel_map.items():
             channel_text = str(channel).strip()
             mapped_text = str(mapped).strip()
+             
+            # Skip channels mapped to "none"/blank or to symbolic routine
+            # roles (Vg, Vd, Vb, Vs, etc.) — those are handled elsewhere,
+            # not as fixed auxiliary voltages.
             if mapped_text.lower() in {"none", "null", "", "vg", "vd", "vb", "vs", "vgxp", "vgxn"}:
                 continue
+
+             # Try to parse the mapped value as a literal voltage
+            # (e.g. "3.3" or "3.3V"). If it doesn't parse as a number,
+            # it's not a fixed-voltage assignment, so skip it.
             fixed_v = _parse_voltage_literal(mapped_text)
             if fixed_v is None:
                 continue
+                 
+            # Skip rails meant to be set by hand (e.g. logic supply rails).
             if _is_manual_supply_rail(fixed_v):
                 print(f"Skipping manual supply rail {name} {channel_text} = {fixed_v:.3f} V")
                 continue
             fixed_channels.append((channel_text, fixed_v))
-
+             
+        # If this instrument has no fixed channels to apply, don't bother opening it.
         if not fixed_channels:
             continue
 
+        # Open the supply and turn on the fixed-voltage channels identified above.
         supply = E3631A(
             port=port,
             baudrate=int(cfg.get("baudrate", 9600)),
@@ -220,17 +256,22 @@ def _enable_aux_fixed_e3631a(config_path: str | Path, in_use_ports: set[str]) ->
         supply.open()
         supply.output_on()
 
+        # Apply each fixed voltage/current-limit pair to its channel.
         for channel, fixed_v in fixed_channels:
             supply.apply(channel, fixed_v, current_limit_a)
             print(f"Set fixed supply {name} {channel} = {fixed_v:.3f} V")
 
         print(f"Enabled auxiliary E3631A {name} on {port}")
+
+         # Track this instance so the caller can turn it off / close it
+        # later (e.g. in main()'s finally block).
         opened.append(supply)
 
     return opened
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Define and return the command-line argument parser for this script."""
     parser = argparse.ArgumentParser(
         description=(
             "Run routines from a measurement-routines CSV. "
@@ -280,8 +321,12 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
 
+    # Load instrument config (SMU/supply ports, channel maps, etc.) and the
+    # list of routine specs (sweep/step definitions) from the CSV.
     config = load_project_config(args.config)
     routine_specs = load_routines_csv(args.routines_csv)
+
+    # Decide which routine(s) to run: either a single index or all of them.
     if args.routine_index is None:
         routine_indices = list(range(len(routine_specs)))
     else:
@@ -289,7 +334,9 @@ def main() -> None:
             raise ValueError(f"routine_index {args.routine_index} out of range [0, {len(routine_specs) - 1}]")
         routine_indices = [args.routine_index]
     
-    # Reset/close any lingering connections on the ports
+    # Reset/close any lingering connections on the ports used by the main
+    # routine sources (gate, drain, bulk, and any other quantity sources)
+    # before opening them for real, to avoid "port already in use" issues.
     ports_to_reset = [config.gate_source.port, config.drain_source.port]
     if config.bulk_source:
         ports_to_reset.append(config.bulk_source.port)
@@ -299,6 +346,8 @@ def main() -> None:
     reset_serial_ports(ports_to_reset)
     time.sleep(0.5)  # Brief pause after reset
 
+    # Turn on any auxiliary fixed-voltage E3631A channels that aren't part
+    # of the main routine sources.
     aux_supplies = _enable_aux_fixed_e3631a(args.config, set(ports_to_reset))
     
     all_points: list[RoutineMeasurement] = []
@@ -306,13 +355,19 @@ def main() -> None:
 
     try:
         for order, routine_index in enumerate(routine_indices):
-            selected_routine = routine_specs[routine_index]
+            selected_routine = routine_specs[routine_index]\
+
+            # Setup live plot for routine unless disabled by user flag
             live_plot = None if args.no_live_plot else LiveRoutinePlot(
                 routine_name=selected_routine.name,
                 step_param=selected_routine.step_param,
                 sweep_param=selected_routine.sweep_param,
             )
             try:
+                # Running the routine, feeding each new point to
+                # live plots update() callback as its acquired
+                # Only prompt for config before first routine
+                # (order == 0 ), and only if user hasn't disabled it
                 routine, points = run_single_routine_from_csv(
                     config=config,
                     routines_csv=args.routines_csv,
@@ -322,20 +377,27 @@ def main() -> None:
                     ids_settle_s=args.ids_settle_s,
                 )
             finally:
+                # Always finalize (block on) the plot window, even if the
+                # routine raised an exception, so the user can still see
+                # whatever data was captured.
                 if live_plot is not None:
                     live_plot.finalize()
 
             all_points.extend(points)
-            completed.append((routine_index, routine.name, len(points)))
+            completed.append((routine_index, routine.name, len(points))) # add index, name, and points to list
 
+        # Write out all collected measurement points across all routines run.
         write_routine_measurements_csv(args.output_csv, all_points)
     finally:
+        # Always attempt to turn off and close auxiliary supplies, even if
+        # something above failed, to avoid leaving voltages applied.
         for supply in aux_supplies:
             try:
                 supply.output_off()
             finally:
                 supply.close()
-
+                 
+    # Print a summary of what was run.
     print(f"Routines run: {len(completed)}")
     for routine_index, routine_name, point_count in completed:
         print(f"  - index {routine_index}: {routine_name} ({point_count} points)")
