@@ -50,4 +50,14 @@ instruments:
       CH1: None
       CH2: None
       CH3: None
-
+      
+  rigol_dp8xx_a:
+    type: RigolDP8xx
+    resource_name: USB0::0x1AB1::0x0E11::DP8F262800251::INSTR
+    timeout_ms: 5000
+    current_limit_a: 0.1
+    # Fixed auxiliary rails, mirroring the manual values from the old script.
+    channel_map:
+      CH1: 0.9V
+      CH2: 1.8V
+      CH3: None
