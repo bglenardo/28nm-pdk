@@ -56,7 +56,19 @@ instruments:
     resource_name: USB0::0x1AB1::0x0E11::DP8F262800251::INSTR
     timeout_ms: 5000
     current_limit_a: 0.1
-    # Fixed auxiliary rails, mirroring the manual values from the old script.
+    channel_map:
+      CH1: Vb
+      CH2: Vg
+      CH3: None
+
+  rigol_dp8xx_b:
+    type: RigolDP8xx
+    resource_name: USB0::0x1AB1::0x0E11::DP8F261000066::INSTR
+    timeout_ms: 5000
+    current_limit_a: 0.1
+    # Fixed auxiliary rails; software intentionally does not drive these
+    # since they're meant to be set manually (mirrors the old script's
+    # 0.9 V / 1.8 V rails).
     channel_map:
       CH1: 0.9V
       CH2: 1.8V
