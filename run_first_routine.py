@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from iv_measure.config import load_project_config
 from iv_measure.e3631a import E3631A
+from iv_measure.rigol_dp8xx import RigolDP8xx
 from iv_measure.routines import load_routines_csv, RoutineMeasurement, run_single_routine_from_csv, write_routine_measurements_csv
 
 
@@ -168,6 +169,97 @@ def _is_manual_supply_rail(voltage_v: float) -> bool:
     """
     return abs(voltage_v - 0.9) <= 1e-6 or abs(voltage_v - 1.8) <= 1e-6
 
+def _enable_aux_fixed_rigol(config_path: str | Path, in_use_resources: set[str]) -> list[RigolDP8xx]:
+    """
+    Enable fixed-voltage channels on any Rigol DP800-series supplies defined
+    in the config that are NOT already opened as routine sources.
+
+    This mirrors _enable_aux_fixed_e3631a, but differs in two ways to match
+    how the Rigol driver works:
+      1. Rigol instruments are identified by a VISA "resource_name" string
+         (e.g. "USB0::...::INSTR") rather than a serial "port" like COM5.
+      2. Rigol channels are named CH1/CH2/CH3 rather than P6V/P25V/N25V,
+         so there's no fixed set of "valid" channel names to validate against
+         beyond what RigolDP8xx.apply() already checks.
+
+    Returns the list of opened RigolDP8xx instances so the caller can turn
+    them off and close them when done.
+    """
+    # Load the entire instrument config YAML file into a plain dict.
+    raw = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return []
+
+    instruments = raw.get("instruments")
+    if not isinstance(instruments, dict):
+        return []
+
+    opened: list[RigolDP8xx] = []
+
+    for name, cfg in instruments.items():
+        if not isinstance(cfg, dict):
+            continue
+
+        # Only consider entries explicitly typed as "RigolDP8xx".
+        if str(cfg.get("type", "")).strip().upper() != "RIGOLDP8XX":
+            continue
+
+        resource_name = str(cfg.get("resource_name", "")).strip()
+        # Skip if this resource is already claimed by a routine source, or
+        # if no resource_name is given at all.
+        if not resource_name or resource_name in in_use_resources:
+            continue
+
+        channel_map = cfg.get("channel_map")
+        if not isinstance(channel_map, dict):
+            continue
+
+        # Current limit applied to every fixed channel on this supply.
+        current_limit_a = float(cfg.get("current_limit_a", 0.1))
+
+        # Same idea as the E3631A version: "fixed" channels are ones mapped
+        # to a plain numeric voltage rather than a symbolic routine role
+        # (Vg/Vd/Vb/Vs/etc.) or "none".
+        fixed_channels: list[tuple[str, float]] = []
+        for channel, mapped in channel_map.items():
+            channel_text = str(channel).strip()
+            mapped_text = str(mapped).strip()
+
+            if mapped_text.lower() in {"none", "null", "", "vg", "vd", "vb", "vs", "vgxp", "vgxn"}:
+                continue
+
+            fixed_v = _parse_voltage_literal(mapped_text)
+            if fixed_v is None:
+                continue
+
+            if _is_manual_supply_rail(fixed_v):
+                print(f"Skipping manual supply rail {name} {channel_text} = {fixed_v:.3f} V")
+                continue
+
+            fixed_channels.append((channel_text, fixed_v))
+
+        # Nothing to apply on this instrument — skip opening it entirely.
+        if not fixed_channels:
+            continue
+
+        # Open the Rigol supply and apply each fixed channel's voltage/current.
+        supply = RigolDP8xx(
+            resource_name=resource_name,
+            timeout_ms=int(cfg.get("timeout_ms", 5000)),
+        )
+        supply.open()
+
+        for channel, fixed_v in fixed_channels:
+            # RigolDP8xx.apply() both configures and turns on the channel,
+            # unlike E3631A where output_on() is a separate, single
+            # whole-instrument call made once up front.
+            supply.apply(channel, fixed_v, current_limit_a)
+            print(f"Set fixed supply {name} {channel} = {fixed_v:.3f} V")
+
+        print(f"Enabled auxiliary Rigol {name} on {resource_name}")
+        opened.append(supply)
+
+    return opened
 
 def _enable_aux_fixed_e3631a(config_path: str | Path, in_use_ports: set[str]) -> list[E3631A]:
      """
