@@ -25,7 +25,8 @@ from iv_measure.routines import load_routines_csv, RoutineMeasurement, run_singl
 
 
 class LiveRoutinePlot:
-    def __init__(self, routine_name: str, step_param: str, sweep_param: str) -> None:
+    def __init__(self, routine_name: str, step_param: str, sweep_param: str,
+                 mirror_pivot: float | None = None) -> None:
         plt.ion()
         self._figure, (self._vds_linear_ax, self._vds_log_ax) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 
@@ -36,15 +37,21 @@ class LiveRoutinePlot:
 
         self._step_param = step_param
         self._sweep_param = sweep_param
+        # PMOS: reflect each swept x about this pivot (= sweep_start + sweep_stop)
+        # so the data is mirrored horizontally while the x-axis keeps its normal
+        # orientation. None (default) = NMOS, no mirroring.
+        self._mirror_pivot = mirror_pivot
+        # PMOS (mirror_pivot set) also gets |.| bars on the current axis label.
+        ylabel = "|Drain current| (A)" if mirror_pivot is not None else "Drain current (A)"
 
         self._vds_linear_ax.set_title(f"{routine_name} Ids vs Vds (Linear)")
         self._vds_linear_ax.set_xlabel(f"{sweep_param} (V)")
-        self._vds_linear_ax.set_ylabel("Drain current (A)")
+        self._vds_linear_ax.set_ylabel(ylabel)
         self._vds_linear_ax.grid(True, alpha=0.3)
 
         self._vds_log_ax.set_title(f"{routine_name} Ids vs Vds (Log)")
         self._vds_log_ax.set_xlabel(f"{sweep_param} (V)")
-        self._vds_log_ax.set_ylabel("Drain current (A)")
+        self._vds_log_ax.set_ylabel(ylabel)
         self._vds_log_ax.set_yscale("log")
         self._vds_log_ax.grid(True, which="both", alpha=0.3)
 
@@ -62,7 +69,10 @@ class LiveRoutinePlot:
             self._vds_linear_ax.legend(loc="best")
             self._vds_log_ax.legend(loc="best")
 
-        self._vds_x_data[step_value].append(point.sweep_value_v)
+        x_value = point.sweep_value_v
+        if self._mirror_pivot is not None:
+            x_value = self._mirror_pivot - x_value
+        self._vds_x_data[step_value].append(x_value)
         self._vds_y_data[step_value].append(point.drain_i_a)
         vds_linear_line.set_data(self._vds_x_data[step_value], self._vds_y_data[step_value])
         vds_log_y_data = [value if value > 0 else math.nan for value in self._vds_y_data[step_value]]

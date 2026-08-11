@@ -53,7 +53,13 @@ from pathlib import Path
 
 import matplotlib
 
-matplotlib.use("Agg")  # headless-safe: overnight runs have no display
+# Backend must be chosen BEFORE pyplot is imported. Default is Agg (headless-
+# safe: overnight runs have no display and just write PNGs). With --live-plot we
+# need an interactive backend that can show a window, so we peek at argv here --
+# argparse hasn't run yet at import time. PNGs are still saved either way.
+_LIVE_PLOT = "--live-plot" in sys.argv
+if not _LIVE_PLOT:
+    matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import serial
 
@@ -75,6 +81,11 @@ from iv_measure.routines import (
 import device_registry
 import device_geometry
 from validate_iv import grade_output_family
+
+# Reuse run_routine.py's live plot VERBATIM (its .update is the point_callback
+# that run_single_routine_from_csv already fires per measured point). Imported
+# lazily inside main() only when --live-plot is set, so a headless run never
+# pulls in the interactive path.
 
 
 # --------------------------------------------------------------------------- #
@@ -142,7 +153,13 @@ def select_device(ser: serial.Serial, flavor: int, row: int, col: int,
             mismatches = int(line.split(":")[1])
         if line == "SEL_DONE":
             if mismatches is None:
-                raise RuntimeError("SEL completed but no Mismatches line seen")
+                # Scope-mode / daisy-chain sketch (scopes_asic_test.ino) does
+                # no analogRead and never prints Mismatches; SEL_DONE alone
+                # confirms the 688-clock shift completed. The count only ever
+                # tested the Sout read-back path, never selection (Q1/Q2), so
+                # its absence is expected -- the output-shape grader is the real
+                # gate on whether selection landed. Accept and move on.
+                return
             if mismatches > 4:  # CLAUDE.md Q2 / Section 5: 2 ideal, 3 bench-normal
                 msg = (f"scan verification: {mismatches} mismatches (>4). "
                        "2-3 is expected (same-cycle check quirk + weak-Sout "
@@ -158,15 +175,23 @@ def select_device(ser: serial.Serial, flavor: int, row: int, col: int,
 # --------------------------------------------------------------------------- #
 # Plotting (same content as plot_ids_vs_vgs.py / run_routine.py live plot,
 # rendered once from the finished point list)
-# --------------------------------------------------------------------------- #
 def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
                  sweep_param: str, step_param: str, out_png: Path,
-                 subtitle: str | None = None) -> None:
+                 subtitle: str | None = None, pmos: bool = False) -> None:
     """Linear + log Ids vs sweep parameter, one curve per step value.
 
     subtitle: optional line stamped across the top of the image -- used to
     record the device geometry (flavor #, W, L, nf) and measurement date on
     the figure itself, per the requested output convention.
+
+    pmos: when True the data is MIRRORED horizontally about the sweep midpoint
+    while the x-axis keeps its normal orientation (0 V at left, ~0.9 V at right,
+    positive labels). The Keithley reports the sweep as Vd going high->low, but
+    it is physically sweeping |Vsd|, so as-measured the largest current sits at
+    the 0.9 V point. Reflecting each x to (lo + hi) - x moves that largest-current
+    point to the 0 V side and the smallest-current point to the 0.9 V side, so
+    the curve reads left-to-right as |Vsd| increases. Current values are plotted
+    exactly as measured (unchanged); only their x-positions are reflected.
     """
     by_step: dict[float, tuple[list[float], list[float]]] = {}
     for p in points:
@@ -174,22 +199,34 @@ def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
         xs.append(p.sweep_value_v)
         ys.append(p.drain_i_a)
 
+    # PMOS: reflect x about the sweep midpoint (lo + hi - x). Pivot from the
+    # actual measured range so it is exact regardless of sweep direction; NMOS
+    # leaves x untouched.
+    if pmos:
+        all_x = [x for xs, _ in by_step.values() for x in xs]
+        pivot = (min(all_x) + max(all_x)) if all_x else 0.0
+        mirror = lambda x: pivot - x
+    else:
+        mirror = lambda x: x
+
     fig, (ax_lin, ax_log) = plt.subplots(1, 2, figsize=(12, 5),
                                          constrained_layout=True)
     for step_v in sorted(by_step):
         xs, ys = by_step[step_v]
+        px = [mirror(x) for x in xs]
         label = f"{step_param}={step_v:.3f} V"
-        ax_lin.plot(xs, ys, marker="o", ms=3, lw=1.2, label=label)
-        ax_log.plot(xs, [abs(y) + 1e-15 for y in ys], marker="o", ms=3,
+        ax_lin.plot(px, ys, marker="o", ms=3, lw=1.2, label=label)
+        ax_log.plot(px, [abs(y) + 1e-15 for y in ys], marker="o", ms=3,
                     lw=1.2, label=label)
     if subtitle:
         fig.suptitle(subtitle, fontsize=10)
     ax_lin.set_title(f"{routine_name} (linear)")
     ax_log.set_title(f"{routine_name} (log)")
     ax_log.set_yscale("log")
+    ylabel = "|Drain current| (A)" if pmos else "Drain current (A)"
     for ax in (ax_lin, ax_log):
         ax.set_xlabel(f"{sweep_param} (V)")
-        ax.set_ylabel("Drain current (A)")
+        ax.set_ylabel(ylabel)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
     fig.savefig(out_png, dpi=200)
@@ -232,7 +269,18 @@ def main() -> None:
                     "count tests only the Sout read-back path (Q1/Q2), never "
                     "selection; use when Sout read-back is known-broken and "
                     "selection is verified by the output-shape grader instead.")
+    ap.add_argument("--live-plot", action="store_true",
+                    help="show a live matplotlib window that draws each device's "
+                    "IV curve point-by-point as it is measured, then auto-closes "
+                    "and advances to the next device (no clicking). PNGs are "
+                    "saved either way. Omit for headless overnight runs.")
     args = ap.parse_args()
+
+    # Live plot uses run_routine.py's class verbatim; import only when asked so
+    # a headless run never touches the interactive path.
+    global LiveRoutinePlot
+    if args.live_plot:
+        from run_routine import LiveRoutinePlot
 
     # Resolve which routine file each type uses. At least one source required.
     nmos_routines = args.routines_nmos or args.routines
@@ -274,11 +322,22 @@ def main() -> None:
         dev_dir = out_root / kind / dev_name
         for ridx in args.routine_index:
             rname = routines[ridx].name.replace(" ", "_")
-            stem = f"{rname}_{measured_on}"          # date in the filename
+            # Label the stem with the device so each CSV names the device it
+            # measured and stays paired with its PNG (same stem). The CSV writer
+            # itself is reuse-only (routines.py), so the label lives in the
+            # filename: <device>_<geo>_<routine>_<date>. Geometry (W/L/nf) is
+            # sanitized to a filename-safe token.
+            geo_token = "-".join(
+                t for t in ("".join(ch if ch.isalnum() else " "
+                                    for ch in geo_label)).split())
+            stem = f"{dev_name}__{geo_token}__{rname}_{measured_on}"
             csv_path = dev_dir / f"{stem}.csv"
             png_path = dev_dir / f"{stem}.png"
-            # Resume: skip if this routine already has ANY dated measurement.
-            if dev_dir.exists() and any(dev_dir.glob(f"{rname}_*.csv")):
+            # Resume: skip if this device+routine already has ANY dated CSV.
+            # Glob matches the new stem shape (device__geo__routine_date) on any
+            # date, so a re-run into the same --out still resumes correctly.
+            if dev_dir.exists() and any(
+                    dev_dir.glob(f"{dev_name}__*__{rname}_*.csv")):
                 skipped += 1
                 continue
             print(f"[{done + skipped + failed + 1}] {kind}/{dev_name} :: "
@@ -286,13 +345,36 @@ def main() -> None:
             try:
                 select_device(scan, flavor, row, col,
                               ignore_readback=args.ignore_readback)
+                # Live plot: reuse run_routine.py's LiveRoutinePlot unchanged.
+                # Its .update is the point_callback the runner fires per point,
+                # so the curve draws as it measures. Auto-advance (not finalize,
+                # which would block): the figure is closed after each device.
+                live = None
+                if args.live_plot:
+                    rspec = routines[ridx]
+                    # PMOS: mirror the live curve about the sweep midpoint
+                    # (start + stop) to match the mirrored saved PNG; NMOS = None.
+                    mirror_pivot = (rspec.sweep_start + rspec.sweep_stop
+                                    if device_registry.is_pmos(flavor) else None)
+                    live = LiveRoutinePlot(f"{dev_name} {rspec.name}",
+                                           rspec.step_param, rspec.sweep_param,
+                                           mirror_pivot=mirror_pivot)
                 spec, points = run_single_routine_from_csv(   # existing runner
-                    config, routines_path, routine_index=ridx)
+                    config, routines_path, routine_index=ridx,
+                    point_callback=(live.update if live is not None else None))
+                if live is not None:
+                    plt.close(live._figure)  # auto-advance to next device
                 dev_dir.mkdir(parents=True, exist_ok=True)
                 write_routine_measurements_csv(csv_path, points)  # existing
                 save_iv_plot(points, f"{dev_name} {spec.name}",
                              spec.sweep_param, spec.step_param, png_path,
-                             subtitle=f"{geo_label}  |  measured {measured_on}")
+                             subtitle=f"{geo_label}  |  measured {measured_on}",
+                             # Source-reference the plot for PMOS flavors so the
+                             # 0.9->0 sweep reads as a normal first-quadrant
+                             # family. Detected from the flavor via the registry
+                             # (the authoritative type map), not from the routine
+                             # file, so it is correct however the device is routed.
+                             pmos=device_registry.is_pmos(flavor))
                 # Grade the shape (Q8). Data is always kept; a bad shape is
                 # flagged, not discarded, so it can't masquerade as a good run.
                 verdict = grade_output_family(points, compliance_a=compliance_a)
