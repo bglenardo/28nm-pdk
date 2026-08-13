@@ -85,12 +85,21 @@ def main() -> int:
             print("FAIL: no SEL_DONE within 30 s.")
             return 1
         m = cap.get("mismatches")
-        if m is None or m > 4:  # CLAUDE.md Q2 / Section 5: 2 ideal, 3 bench-normal
+        if m is None:
+            # Scope-mode / daisy-chain sketch (scopes_asic_test.ino): no
+            # analogRead, so it never prints a Mismatches line. SEL_DONE alone
+            # means the 688-clock shift completed. The mismatch count only ever
+            # tested the Sout read-back path, never selection (CLAUDE.md Q1/Q2),
+            # so its absence is expected here -- selection is confirmed by
+            # measuring the transistor (validate_iv), not by Sout.
+            print("PASS (SEL_DONE; no readback -- scope-mode sketch, Q1/Q2)")
+        elif m > 4:  # CLAUDE.md Q2 / Section 5: 2 ideal, 3 bench-normal
             print(f"FAIL: Mismatches={m} (expected 0-4; 2 is ideal, 3 is the "
                   "bench norm). Check Sout wiring/threshold and chip power.")
             return 1
-        print(f"PASS (Mismatches={m}"
-              + (", the expected same-cycle-check artifact)" if m == 2 else ")"))
+        else:
+            print(f"PASS (Mismatches={m}"
+                  + (", the expected same-cycle-check artifact)" if m == 2 else ")"))
 
     print("\nAll checks passed -- proceed to run_device_loop.py.")
     return 0

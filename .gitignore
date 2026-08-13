@@ -12,5 +12,15 @@ data/chip_two/**/*.png
 data/one_device/**
 data/*.png
 
+# Ignore every top-level run-output dir under data/ (reproducible, kept local),
+# but keep the curated/structural ones tracked. Already-tracked files are
+# unaffected by these rules; this only stops NEW run dirs from being committed.
+data/*/
+!data/chip_one/
+!data/chip_two/
+!data/one_device/
+!data/diagnostics_*/
+data/*.zip
+
 # Large datasheet PDF — kept locally, not in git.
 docs/*.pdf
