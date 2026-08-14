@@ -26,7 +26,8 @@ from iv_measure.routines import load_routines_csv, RoutineMeasurement, run_singl
 
 class LiveRoutinePlot:
     def __init__(self, routine_name: str, step_param: str, sweep_param: str,
-                 mirror_pivot: float | None = None) -> None:
+                 pmos: bool = False, step_label_pivot: float | None = None,
+                 subtitle: str | None = None) -> None:
         plt.ion()
         self._figure, (self._vds_linear_ax, self._vds_log_ax) = plt.subplots(1, 2, figsize=(12, 5), constrained_layout=True)
 
@@ -37,31 +38,51 @@ class LiveRoutinePlot:
 
         self._step_param = step_param
         self._sweep_param = sweep_param
-        # PMOS: reflect each swept x about this pivot (= sweep_start + sweep_stop)
-        # so the data is mirrored horizontally while the x-axis keeps its normal
-        # orientation. None (default) = NMOS, no mirroring.
-        self._mirror_pivot = mirror_pivot
-        # PMOS (mirror_pivot set) also gets |.| bars on the current axis label.
-        ylabel = "|Drain current| (A)" if mirror_pivot is not None else "Drain current (A)"
+        # PMOS output family (Ids vs Vds) only: invert the x-axis (0.9 V at the
+        # left origin, 0 V on the right) so the 0.9->0 sweep reads in the
+        # direction it ran. The transfer sweep (Vgs) runs 0->0.9 and is NOT
+        # inverted. Matches the saved PNG.
+        self._invert_x = pmos and (sweep_param != "Vg")
+        # LABEL-ONLY: when set, the step (legend) value is shown as
+        # step_label_pivot - step_value. For the pMOS transfer routine the CSV Vd
+        # step is |Vsd|, so the true device Vd is (rail - Vd), pivot = 0.9 V.
+        self._step_label_pivot = step_label_pivot
 
-        self._vds_linear_ax.set_title(f"{routine_name} Ids vs Vds (Linear)")
-        self._vds_linear_ax.set_xlabel(f"{sweep_param} (V)")
+        # A Vg sweep is an Ids-vs-Vgs transfer curve (both polarities).
+        transfer = (sweep_param == "Vg")
+        descriptor = "Ids vs Vgs" if transfer else "Ids vs Vds"
+        xlabel = "Vgs (V)" if transfer else f"{sweep_param} (V)"
+        ylabel = "Ids (A)" if transfer else "Drain current (A)"
+
+        # Optional geometry/date line stamped across the top, matching the PNG.
+        if subtitle:
+            self._figure.suptitle(subtitle, fontsize=10)
+
+        self._vds_linear_ax.set_title(f"{routine_name} {descriptor} (Linear)")
+        self._vds_linear_ax.set_xlabel(xlabel)
         self._vds_linear_ax.set_ylabel(ylabel)
         self._vds_linear_ax.grid(True, alpha=0.3)
 
-        self._vds_log_ax.set_title(f"{routine_name} Ids vs Vds (Log)")
-        self._vds_log_ax.set_xlabel(f"{sweep_param} (V)")
+        self._vds_log_ax.set_title(f"{routine_name} {descriptor} (Log)")
+        self._vds_log_ax.set_xlabel(xlabel)
         self._vds_log_ax.set_ylabel(ylabel)
         self._vds_log_ax.set_yscale("log")
         self._vds_log_ax.grid(True, which="both", alpha=0.3)
+        if self._invert_x:
+            self._vds_linear_ax.invert_xaxis()
+            self._vds_log_ax.invert_xaxis()
 
     def update(self, point: RoutineMeasurement) -> None:
         step_value = point.step_value_v
         vds_linear_line = self._vds_linear_lines.get(step_value)
         vds_log_line = self._vds_log_lines.get(step_value)
         if vds_linear_line is None or vds_log_line is None:
-            (vds_linear_line,) = self._vds_linear_ax.plot([], [], marker="o", linewidth=1.5, markersize=4, label=f"{self._step_param}={step_value:.3f} V")
-            (vds_log_line,) = self._vds_log_ax.plot([], [], marker="o", linewidth=1.5, markersize=4, label=f"{self._step_param}={step_value:.3f} V")
+            # pMOS transfer routine: CSV Vd step is |Vsd|; show true Vd = pivot - Vd.
+            label_value = (self._step_label_pivot - step_value
+                           if self._step_label_pivot is not None else step_value)
+            label = f"{self._step_param}={label_value:.3f} V"
+            (vds_linear_line,) = self._vds_linear_ax.plot([], [], marker="o", linewidth=1.5, markersize=4, label=label)
+            (vds_log_line,) = self._vds_log_ax.plot([], [], marker="o", linewidth=1.5, markersize=4, label=label)
             self._vds_linear_lines[step_value] = vds_linear_line
             self._vds_log_lines[step_value] = vds_log_line
             self._vds_x_data[step_value] = []
@@ -69,9 +90,8 @@ class LiveRoutinePlot:
             self._vds_linear_ax.legend(loc="best")
             self._vds_log_ax.legend(loc="best")
 
+        # x plotted as measured; PMOS orientation is handled by invert_xaxis().
         x_value = point.sweep_value_v
-        if self._mirror_pivot is not None:
-            x_value = self._mirror_pivot - x_value
         self._vds_x_data[step_value].append(x_value)
         self._vds_y_data[step_value].append(point.drain_i_a)
         vds_linear_line.set_data(self._vds_x_data[step_value], self._vds_y_data[step_value])
@@ -82,6 +102,13 @@ class LiveRoutinePlot:
         self._vds_linear_ax.autoscale_view()
         self._vds_log_ax.relim()
         self._vds_log_ax.autoscale_view()
+        if self._invert_x:
+            # autoscale_view can reset axis direction; re-assert the inversion
+            # so the pMOS output x-axis stays 0.9 V (left) -> 0 V (right).
+            for ax in (self._vds_linear_ax, self._vds_log_ax):
+                lo, hi = ax.get_xlim()
+                if lo < hi:
+                    ax.set_xlim(hi, lo)
         self._ensure_log_limits()
         self._figure.canvas.draw_idle()
         self._figure.canvas.flush_events()

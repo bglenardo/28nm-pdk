@@ -87,6 +87,12 @@ from validate_iv import grade_output_family
 # lazily inside main() only when --live-plot is set, so a headless run never
 # pulls in the interactive path.
 
+# PMOS source rail (V). On this bench the pMOS source is held at 0.9 V and the
+# CSV records the STEP Vd as |Vsd| (the magnitude of the source-drain drop), so
+# the true device Vd shown in a transfer-plot legend is VSD_RAIL_V - Vd (e.g. a
+# CSV Vd of 0.3 is the real Vd = 0.6). Label-only; measured data is unchanged.
+VSD_RAIL_V = 0.9
+
 
 # --------------------------------------------------------------------------- #
 # Scan-Arduino helpers (talks to the SEL-patched sketch)
@@ -184,14 +190,17 @@ def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
     record the device geometry (flavor #, W, L, nf) and measurement date on
     the figure itself, per the requested output convention.
 
-    pmos: when True the data is MIRRORED horizontally about the sweep midpoint
-    while the x-axis keeps its normal orientation (0 V at left, ~0.9 V at right,
-    positive labels). The Keithley reports the sweep as Vd going high->low, but
-    it is physically sweeping |Vsd|, so as-measured the largest current sits at
-    the 0.9 V point. Reflecting each x to (lo + hi) - x moves that largest-current
-    point to the 0 V side and the smallest-current point to the 0.9 V side, so
-    the curve reads left-to-right as |Vsd| increases. Current values are plotted
-    exactly as measured (unchanged); only their x-positions are reflected.
+    pmos: when True the x-axis is INVERTED (0.9 V at the left origin, 0 V on the
+    right) so the pMOS sweep -- which runs high->low on this bench -- reads in
+    the direction it was actually swept. The drain current is plotted exactly as
+    measured (true sign, not negated). Additionally, for the pMOS TRANSFER
+    routine (a Vg sweep, where Vd is the STEP param) the CSV Vd is |Vsd|, so the
+    legend is relabeled to the true device Vd = VSD_RAIL_V - Vd. NMOS is
+    unchanged: normal x orientation, raw Vd/Vg, raw Id.
+
+    A Vg-sweep is an Ids-vs-Vgs transfer curve for either polarity, so its axes
+    are labeled Vgs (V) / Ids (A); the Vd-sweep output family keeps Vd / drain
+    current.
     """
     by_step: dict[float, tuple[list[float], list[float]]] = {}
     for p in points:
@@ -199,36 +208,38 @@ def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
         xs.append(p.sweep_value_v)
         ys.append(p.drain_i_a)
 
-    # PMOS: reflect x about the sweep midpoint (lo + hi - x). Pivot from the
-    # actual measured range so it is exact regardless of sweep direction; NMOS
-    # leaves x untouched.
-    if pmos:
-        all_x = [x for xs, _ in by_step.values() for x in xs]
-        pivot = (min(all_x) + max(all_x)) if all_x else 0.0
-        mirror = lambda x: pivot - x
-    else:
-        mirror = lambda x: x
+    # A Vg sweep is a transfer curve -> Vgs/Ids axes (both polarities).
+    transfer = (sweep_param == "Vg")
+    xlabel = "Vgs (V)" if transfer else f"{sweep_param} (V)"
+    ylabel = "Ids (A)" if transfer else "Drain current (A)"
 
     fig, (ax_lin, ax_log) = plt.subplots(1, 2, figsize=(12, 5),
                                          constrained_layout=True)
     for step_v in sorted(by_step):
         xs, ys = by_step[step_v]
-        px = [mirror(x) for x in xs]
-        label = f"{step_param}={step_v:.3f} V"
-        ax_lin.plot(px, ys, marker="o", ms=3, lw=1.2, label=label)
-        ax_log.plot(px, [abs(y) + 1e-15 for y in ys], marker="o", ms=3,
+        # pMOS transfer routine: CSV Vd (the STEP param) is |Vsd|, so show the
+        # true device Vd = rail - Vd in the legend. Label only; data untouched.
+        label_v = (VSD_RAIL_V - step_v) if (pmos and step_param == "Vd") else step_v
+        label = f"{step_param}={label_v:.3f} V"
+        ax_lin.plot(xs, ys, marker="o", ms=3, lw=1.2, label=label)
+        ax_log.plot(xs, [abs(y) + 1e-15 for y in ys], marker="o", ms=3,
                     lw=1.2, label=label)
     if subtitle:
         fig.suptitle(subtitle, fontsize=10)
     ax_lin.set_title(f"{routine_name} (linear)")
     ax_log.set_title(f"{routine_name} (log)")
     ax_log.set_yscale("log")
-    ylabel = "|Drain current| (A)" if pmos else "Drain current (A)"
     for ax in (ax_lin, ax_log):
-        ax.set_xlabel(f"{sweep_param} (V)")
+        ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
+        if pmos and not transfer:
+            # ONLY the pMOS output family (Ids vs Vds) is swept high->low
+            # (0.9->0), so invert its x-axis: 0.9 V at the left origin, 0 V on
+            # the right. The transfer sweep (Vgs) runs 0->0.9 normally and is
+            # NOT inverted.
+            ax.invert_xaxis()
     fig.savefig(out_png, dpi=200)
     plt.close(fig)
 
@@ -352,13 +363,22 @@ def main() -> None:
                 live = None
                 if args.live_plot:
                     rspec = routines[ridx]
-                    # PMOS: mirror the live curve about the sweep midpoint
-                    # (start + stop) to match the mirrored saved PNG; NMOS = None.
-                    mirror_pivot = (rspec.sweep_start + rspec.sweep_stop
-                                    if device_registry.is_pmos(flavor) else None)
-                    live = LiveRoutinePlot(f"{dev_name} {rspec.name}",
+                    is_pmos = device_registry.is_pmos(flavor)
+                    # Vg-sweep transfer routine: device-only prefix so the live
+                    # title reads "<device> Ids vs Vgs" (the class adds the
+                    # descriptor); else keep the routine name for the Vd family.
+                    live_name = (dev_name if rspec.sweep_param == "Vg"
+                                 else f"{dev_name} {rspec.name}")
+                    # pMOS transfer routine (Vd is the STEP param): relabel the
+                    # Vd legend to true Vd = VSD_RAIL_V - Vd (CSV Vd is |Vsd|).
+                    step_label_pivot = (VSD_RAIL_V if (is_pmos
+                                        and rspec.step_param == "Vd") else None)
+                    live = LiveRoutinePlot(live_name,
                                            rspec.step_param, rspec.sweep_param,
-                                           mirror_pivot=mirror_pivot)
+                                           pmos=is_pmos,
+                                           step_label_pivot=step_label_pivot,
+                                           subtitle=f"{geo_label}  |  measured "
+                                                    f"{measured_on}")
                 spec, points = run_single_routine_from_csv(   # existing runner
                     config, routines_path, routine_index=ridx,
                     point_callback=(live.update if live is not None else None))
@@ -366,14 +386,20 @@ def main() -> None:
                     plt.close(live._figure)  # auto-advance to next device
                 dev_dir.mkdir(parents=True, exist_ok=True)
                 write_routine_measurements_csv(csv_path, points)  # existing
-                save_iv_plot(points, f"{dev_name} {spec.name}",
+                # A Vg-sweep transfer routine is titled "Ids vs Vgs" (matching
+                # the NMOS transfer plots); the device-name prefix is kept. The
+                # Vd-sweep output family keeps the routine's own name.
+                plot_title = (f"{dev_name} Ids vs Vgs"
+                              if spec.sweep_param == "Vg"
+                              else f"{dev_name} {spec.name}")
+                save_iv_plot(points, plot_title,
                              spec.sweep_param, spec.step_param, png_path,
                              subtitle=f"{geo_label}  |  measured {measured_on}",
-                             # Source-reference the plot for PMOS flavors so the
-                             # 0.9->0 sweep reads as a normal first-quadrant
-                             # family. Detected from the flavor via the registry
-                             # (the authoritative type map), not from the routine
-                             # file, so it is correct however the device is routed.
+                             # Invert the x-axis for PMOS flavors so the 0.9->0
+                             # sweep reads left-to-right (0.9 V origin). Detected
+                             # from the flavor via the registry (the authoritative
+                             # type map), not the routine file, so it is correct
+                             # however the device is routed.
                              pmos=device_registry.is_pmos(flavor))
                 # Grade the shape (Q8). Data is always kept; a bad shape is
                 # flagged, not discarded, so it can't masquerade as a good run.
