@@ -87,6 +87,13 @@ from validate_iv import grade_output_family
 # lazily inside main() only when --live-plot is set, so a headless run never
 # pulls in the interactive path.
 
+# PMOS source rail (V). On this bench the pMOS source is held at 0.9 V and the
+# TRANSFER routine's CSV stores its STEP Vd as |Vsd| (the source-drain drop),
+# so the true device Vd shown in that plot's legend is VSD_RAIL_V - Vd (e.g. a
+# CSV Vd of 0.3 is the real Vd = 0.6). Label-only; measured data is unchanged,
+# and this applies ONLY to the transfer routine (step param == Vd).
+VSD_RAIL_V = 0.9
+
 
 # --------------------------------------------------------------------------- #
 # Scan-Arduino helpers (talks to the SEL-patched sketch)
@@ -199,10 +206,13 @@ def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
         xs.append(p.sweep_value_v)
         ys.append(p.drain_i_a)
 
-    # PMOS: reflect x about the sweep midpoint (lo + hi - x). Pivot from the
-    # actual measured range so it is exact regardless of sweep direction; NMOS
-    # leaves x untouched.
-    if pmos:
+    # PMOS OUTPUT (Ids-vs-Vds) ONLY: reflect x about the sweep midpoint
+    # (lo + hi - x). Pivot from the actual measured range so it is exact
+    # regardless of sweep direction. The PMOS transfer (Vgs) sweep and ALL nmos
+    # plots leave x untouched.
+    pmos_output = pmos and (sweep_param == "Vd")
+    pmos_transfer = pmos and (sweep_param == "Vg")
+    if pmos_output:
         all_x = [x for xs, _ in by_step.values() for x in xs]
         pivot = (min(all_x) + max(all_x)) if all_x else 0.0
         mirror = lambda x: pivot - x
@@ -214,7 +224,10 @@ def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
     for step_v in sorted(by_step):
         xs, ys = by_step[step_v]
         px = [mirror(x) for x in xs]
-        label = f"{step_param}={step_v:.3f} V"
+        # PMOS transfer routine: CSV Vd (the STEP param) is |Vsd|, so show the
+        # true device Vd = rail - Vd in the legend. PMOS-only, label only.
+        label_v = (VSD_RAIL_V - step_v) if pmos_transfer else step_v
+        label = f"{step_param}={label_v:.3f} V"
         ax_lin.plot(px, ys, marker="o", ms=3, lw=1.2, label=label)
         ax_log.plot(px, [abs(y) + 1e-15 for y in ys], marker="o", ms=3,
                     lw=1.2, label=label)
@@ -223,9 +236,16 @@ def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
     ax_lin.set_title(f"{routine_name} (linear)")
     ax_log.set_title(f"{routine_name} (log)")
     ax_log.set_yscale("log")
-    ylabel = "|Drain current| (A)" if pmos else "Drain current (A)"
+    # Axis labels: PMOS transfer -> Vg (V) / |Drain current| (A); PMOS output ->
+    # |Drain current| (A). NMOS is left exactly as before (raw sweep_param,
+    # "Drain current"). The PMOS transfer TITLE is still "Ids vs Vgs".
+    if pmos_transfer:
+        xlabel, ylabel = "Vg (V)", "|Drain current| (A)"
+    else:
+        xlabel = f"{sweep_param} (V)"
+        ylabel = "|Drain current| (A)" if pmos else "Drain current (A)"
     for ax in (ax_lin, ax_log):
-        ax.set_xlabel(f"{sweep_param} (V)")
+        ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
@@ -352,13 +372,27 @@ def main() -> None:
                 live = None
                 if args.live_plot:
                     rspec = routines[ridx]
-                    # PMOS: mirror the live curve about the sweep midpoint
-                    # (start + stop) to match the mirrored saved PNG; NMOS = None.
+                    is_pmos = device_registry.is_pmos(flavor)
+                    pmos_output = is_pmos and rspec.sweep_param == "Vd"
+                    pmos_transfer = is_pmos and rspec.sweep_param == "Vg"
+                    # PMOS OUTPUT only: mirror the live curve about the sweep
+                    # midpoint (start + stop) to match the mirrored saved PNG.
+                    # PMOS transfer and all NMOS leave x untouched (None).
                     mirror_pivot = (rspec.sweep_start + rspec.sweep_stop
-                                    if device_registry.is_pmos(flavor) else None)
-                    live = LiveRoutinePlot(f"{dev_name} {rspec.name}",
+                                    if pmos_output else None)
+                    # PMOS transfer: device-only prefix so the live title reads
+                    # "<device> Ids vs Vgs" (class adds descriptor); else keep
+                    # the routine name.
+                    live_name = (dev_name if pmos_transfer
+                                 else f"{dev_name} {rspec.name}")
+                    # PMOS transfer (Vd is the STEP param): relabel the Vd legend
+                    # to true Vd = VSD_RAIL_V - Vd (CSV Vd is |Vsd|).
+                    step_label_pivot = VSD_RAIL_V if pmos_transfer else None
+                    live = LiveRoutinePlot(live_name,
                                            rspec.step_param, rspec.sweep_param,
-                                           mirror_pivot=mirror_pivot)
+                                           mirror_pivot=mirror_pivot,
+                                           step_label_pivot=step_label_pivot,
+                                           transfer_labels=pmos_transfer)
                 spec, points = run_single_routine_from_csv(   # existing runner
                     config, routines_path, routine_index=ridx,
                     point_callback=(live.update if live is not None else None))
@@ -366,7 +400,14 @@ def main() -> None:
                     plt.close(live._figure)  # auto-advance to next device
                 dev_dir.mkdir(parents=True, exist_ok=True)
                 write_routine_measurements_csv(csv_path, points)  # existing
-                save_iv_plot(points, f"{dev_name} {spec.name}",
+                # PMOS Vg-sweep transfer routine is titled "Ids vs Vgs" (device
+                # prefix kept). NMOS and the Vd-sweep output family keep the
+                # routine name unchanged.
+                plot_title = (f"{dev_name} Ids vs Vgs"
+                              if (device_registry.is_pmos(flavor)
+                                  and spec.sweep_param == "Vg")
+                              else f"{dev_name} {spec.name}")
+                save_iv_plot(points, plot_title,
                              spec.sweep_param, spec.step_param, png_path,
                              subtitle=f"{geo_label}  |  measured {measured_on}",
                              # Source-reference the plot for PMOS flavors so the
