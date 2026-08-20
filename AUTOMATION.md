@@ -13,7 +13,7 @@ run on an unproven bench:
 |--------|----------------------|---------|
 | `test_scan_link.py` | No (scan chain only) | 60-second pre-flight |
 | `run_device_loop.py` | Yes | the overnight loop |
-| `flush_analyze.py`  | No | chain-length discovery for the 2nd chip (see [PUSH_RUNBOOK.md](PUSH_RUNBOOK.md)) |
+| `flush_analyze.py`  | No | chain-length discovery for the 2nd daisy-chained chip |
 
 ---
 
@@ -30,8 +30,8 @@ Then confirm:
 
 1. The **SEL-patched sketch** is flashed to the Arduino
    (`Arduino/sketch_may26_r4_SEL/` for chip 1 only, or
-   `Arduino/sketch_may26_r4_SEL_PUSH/` for the two-chip chain — see
-   [PUSH_RUNBOOK.md](PUSH_RUNBOOK.md)). Flash with `arduino-cli`, then
+   `Arduino/sketch_may26_r4_SEL_PUSH/` for the two-chip chain). Flash with
+   `arduino-cli`, then
    **close the Arduino Serial Monitor** — the serial port is
    single-occupancy (only one program at a time).
 2. `instrument_list.yaml` lists the correct **COM ports** for the Keithley
@@ -190,6 +190,7 @@ crash mid-write can leave a truncated CSV that looks "done". After any crash,
 
 - [README.md](README.md) — single-device `run_routine.py`, instrument YAML,
   routine CSV format.
-- [PUSH_RUNBOOK.md](PUSH_RUNBOOK.md) — configuring the **second** chip on the
-  shared scan chain (the push mechanism).
 - [CLAUDE.md](CLAUDE.md) — full hardware brief, quirks (Q1–Q8), and bench log.
+
+Configuring the **second** daisy-chained chip (the push mechanism) uses
+`flush_analyze.py` to measure the chain length; see that script's `--help`.
