@@ -21,7 +21,14 @@ py -3 -m venv .venv
 
 This project provides a Python interface for transistor I-V measurements using instruments connected through USB-to-RS232 adapters.
 
-The main entry point for a single measurement routine is `run_routine.py`.
+The main entry point for a **single** measurement routine is `run_routine.py`
+(documented below).
+
+To **automate the whole transistor array** — select each device via the
+Arduino scan chain, run the routines, and save a CSV + PNG per device,
+unattended overnight — see **[AUTOMATION.md](AUTOMATION.md)**
+(`test_scan_link.py` pre-flight → `run_device_loop.py`). For configuring the
+second daisy-chained chip, see **[PUSH_RUNBOOK.md](PUSH_RUNBOOK.md)**.
 
 ## What the Python code does
 

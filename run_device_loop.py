@@ -48,6 +48,7 @@ import argparse
 import csv
 import sys
 import time
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -177,6 +178,23 @@ def select_device(ser: serial.Serial, flavor: int, row: int, col: int,
                 print(f"    WARN (readback ignored): {msg}")
             return
     raise RuntimeError("timed out waiting for SEL_DONE")
+
+
+# --------------------------------------------------------------------------- #
+# PMOS-output "as-plotted" companion CSV. The main CSV is the raw as-measured
+# data (the "before" copy). For PMOS OUTPUT routines the plot reflects x about
+# the sweep midpoint (pivot - Vd, see save_iv_plot's docstring) so the family
+# reads left-to-right in |Vsd|. This returns a copy of the points with
+# sweep_value_v replaced by that same mirrored value -- nothing else changes
+# (drain_i_a stays exactly as measured) -- so the companion CSV matches the
+# linear panel 1:1. Non-PMOS-output points are returned unchanged.
+def mirror_points_for_plot(points: list[RoutineMeasurement], sweep_param: str,
+                           pmos: bool) -> list[RoutineMeasurement]:
+    if not (pmos and sweep_param == "Vd"):
+        return list(points)
+    xs = [p.sweep_value_v for p in points]
+    pivot = (min(xs) + max(xs)) if xs else 0.0  # same pivot save_iv_plot uses
+    return [replace(p, sweep_value_v=pivot - p.sweep_value_v) for p in points]
 
 
 # --------------------------------------------------------------------------- #
@@ -400,11 +418,22 @@ def main() -> None:
                     plt.close(live._figure)  # auto-advance to next device
                 dev_dir.mkdir(parents=True, exist_ok=True)
                 write_routine_measurements_csv(csv_path, points)  # existing
+                # PMOS OUTPUT only: also write an "as-plotted" CSV whose
+                # sweep_value_v is mirrored exactly like the PNG (pivot - Vd).
+                # The main CSV above stays the raw as-measured "before" copy;
+                # this <stem>__mirrored.csv is the "after" copy that matches the
+                # plotted curve. Same reused writer, so both files share format.
+                is_pmos_flavor = device_registry.is_pmos(flavor)
+                if is_pmos_flavor and spec.sweep_param == "Vd":
+                    mirrored = mirror_points_for_plot(
+                        points, spec.sweep_param, pmos=True)
+                    write_routine_measurements_csv(
+                        dev_dir / f"{stem}__mirrored.csv", mirrored)
                 # PMOS Vg-sweep transfer routine is titled "Ids vs Vgs" (device
                 # prefix kept). NMOS and the Vd-sweep output family keep the
                 # routine name unchanged.
                 plot_title = (f"{dev_name} Ids vs Vgs"
-                              if (device_registry.is_pmos(flavor)
+                              if (is_pmos_flavor
                                   and spec.sweep_param == "Vg")
                               else f"{dev_name} {spec.name}")
                 save_iv_plot(points, plot_title,
@@ -415,7 +444,7 @@ def main() -> None:
                              # family. Detected from the flavor via the registry
                              # (the authoritative type map), not from the routine
                              # file, so it is correct however the device is routed.
-                             pmos=device_registry.is_pmos(flavor))
+                             pmos=is_pmos_flavor)
                 # Grade the shape (Q8). Data is always kept; a bad shape is
                 # flagged, not discarded, so it can't masquerade as a good run.
                 verdict = grade_output_family(points, compliance_a=compliance_a)
