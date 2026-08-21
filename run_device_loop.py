@@ -54,12 +54,20 @@ from pathlib import Path
 
 import matplotlib
 
-# Backend must be chosen BEFORE pyplot is imported. Default is Agg (headless-
-# safe: overnight runs have no display and just write PNGs). With --live-plot we
-# need an interactive backend that can show a window, so we peek at argv here --
-# argparse hasn't run yet at import time. PNGs are still saved either way.
+# Backend must be chosen BEFORE pyplot is imported. We peek at argv here because
+# argparse hasn't run yet at import time. PNGs are saved either way.
+#   headless (default): force Agg -- overnight runs have no display.
+#   --live-plot: force an INTERACTIVE backend (TkAgg) so a window actually
+#     shows. Previously this branch did nothing and trusted matplotlib's auto-
+#     selected default to be interactive; when that default silently fell back
+#     to Agg (no usable GUI backend at init) the live window never appeared and
+#     plt.pause() warned "FigureCanvasAgg is non-interactive". Forcing TkAgg
+#     makes the choice explicit and fails loudly instead of degrading to Agg.
 _LIVE_PLOT = "--live-plot" in sys.argv
-if not _LIVE_PLOT:
+if _LIVE_PLOT:
+    # tkinter ships with the repo's Python; TkAgg needs no extra install.
+    matplotlib.use("TkAgg")
+else:
     matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import serial
@@ -82,6 +90,23 @@ from iv_measure.routines import (
 import device_registry
 import device_geometry
 from validate_iv import grade_output_family
+# Reusable leakage self-subtraction pass (pure, no hardware). Its module
+# docstring names run_device_loop as the intended caller so the __leaksub
+# PNG/CSV are produced in the SAME command as the measurement, right beside
+# the raw files. Called per-device below (scoped to that one folder) so each
+# device folder is complete the moment its device finishes -- no trailing pass,
+# and an interrupted run still leaves every finished device fully processed.
+from leakage_subtract import subtract_tree
+
+# Re-assert the backend AFTER all imports. leakage_subtract (and overlay_*) call
+# matplotlib.use("Agg") at THEIR import time for their own headless/standalone
+# use; imported above, that silently overrode the TkAgg set at line 69, so the
+# --live-plot window never showed (FigureCanvasAgg is non-interactive warning).
+# Setting it once more here, past the last matplotlib-importing module, makes
+# run_device_loop's own choice win regardless of import order. force=True so it
+# switches even though pyplot is already imported.
+if _LIVE_PLOT:
+    matplotlib.use("TkAgg", force=True)
 
 # Reuse run_routine.py's live plot VERBATIM (its .update is the point_callback
 # that run_single_routine_from_csv already fires per measured point). Imported
@@ -411,6 +436,15 @@ def main() -> None:
                                            mirror_pivot=mirror_pivot,
                                            step_label_pivot=step_label_pivot,
                                            transfer_labels=pmos_transfer)
+                    # Explicitly raise the window NON-BLOCKING before the sweep
+                    # starts. LiveRoutinePlot only calls plt.ion()+plt.pause();
+                    # on TkAgg (Windows) that creates the figure but often never
+                    # shows it until something calls show(). run_routine.py shows
+                    # via finalize()'s blocking show, which the loop can't use
+                    # (it must keep measuring), so we show(block=False) here and
+                    # let the per-point plt.pause() in .update keep it live.
+                    live._figure.show()
+                    plt.pause(0.05)
                 spec, points = run_single_routine_from_csv(   # existing runner
                     config, routines_path, routine_index=ridx,
                     point_callback=(live.update if live is not None else None))
@@ -456,6 +490,14 @@ def main() -> None:
                     (dev_dir / f"{stem}.SUSPECT.txt").write_text(
                         "\n".join(verdict.reasons))
                     print(f"    SUSPECT: {'; '.join(verdict.reasons)}")
+                # Leakage self-subtraction, scoped to THIS device's folder only
+                # (never the whole --out tree, which would re-render every prior
+                # device each iteration). subtract_tree touches only routine-0
+                # "Output WO Bulk" files -- other routines are skipped -- so the
+                # __leaksub PNG/CSV appear beside the raw files right now instead
+                # of in a separate trailing pass. Cost is one extra plot render
+                # (~1 s), negligible next to the per-device measurement time.
+                subtract_tree([dev_dir])
             except Exception as exc:  # noqa: BLE001 -- one device must not
                 failed += 1           # kill the overnight loop
                 print(f"    FAILED: {exc} -- continuing with next device")
