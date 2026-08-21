@@ -1,0 +1,1 @@
+SUSPECT: 93% of points pinned at |compliance| (0.01 A) (Q8: pinned = compliance limit, not physics); Vg curves overlap: spread 1.90e-08 A across step values at sweep=0.85 V is < 5% of peak |Id| (Q8: no gate modulation = gate not controlling the channel)
