@@ -67,6 +67,9 @@ By default it uses a simpler two-wire drain measurement. Pass `--four-wire` to e
 
 ```powershell
 python run_routine.py --routine-index 0
+
+
+ python run_device_loop.py --board 1 --chip 1 --temp testK --devices devices.csv --routines-nmos "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" --routines-pmos "Routines/Cryo PDK DC measurement routines - pMOS 28nm.csv" --routine-index 0 1 --scan-port COM13 --out data --live-plot
 ```
 
 ### Copy/paste example
