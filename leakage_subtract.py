@@ -188,17 +188,18 @@ def baseline_from_curves(curves, pmos=False):
 
 
 def find_target_csvs(target: Path):
-    """Expand a target (file or directory) to candidate CSVs (skip verdicts
-    and files this tool already produced)."""
+    """Expand a target (file or directory) to candidate CSVs.
+
+    run_device_loop writes short, content-tagged names per device folder:
+      <routine>_Raw.csv                 the raw measurement (what we subtract)
+      <routine>_Mirrored.csv            PMOS-output as-plotted view (not a
+                                        separate measurement -- skip)
+      <routine>_Subtracted_Leakage.csv  this tool's own output (skip)
+    So we take only *_Raw.csv files. (A bare file target is still honored as-is
+    for the standalone CLI.)"""
     if target.is_file():
         return [target]
-    return sorted(p for p in target.rglob("*.csv")
-                  if not p.name.endswith(".verdict.csv")
-                  and not p.name.endswith("__leaksub.csv")
-                  # skip the PMOS-output "as-plotted" companion CSVs written by
-                  # run_device_loop; they are a mirrored view of the raw file,
-                  # not a separate measurement to self-subtract.
-                  and not p.name.endswith("__mirrored.csv"))
+    return sorted(p for p in target.rglob("*_Raw.csv"))
 
 
 def write_subtracted_csv(src_csv: Path, base_xs, base_ys, base_step: float,
@@ -235,7 +236,7 @@ def write_subtracted_csv(src_csv: Path, base_xs, base_ys, base_step: float,
 
 def plot_before_after(device: str, curves, base_xs, base_ys, base_step: float,
                       out_png: Path, routine_name: str = OUTPUT_ROUTINE_NAME,
-                      subtitle: str = "") -> None:
+                      subtitle: str = "", pmos: bool = False) -> None:
     """2x2: raw (linear/log) over corrected (linear/log), one line per Vg step.
 
     Every measured Vg step is drawn in BOTH rows, including the baseline step
@@ -261,91 +262,131 @@ def plot_before_after(device: str, curves, base_xs, base_ys, base_step: float,
         ax_log_cor.plot(vd, [abs(i) + LOG_FLOOR for i in idc_cor],
                         marker="o", ms=3, lw=1.2, label=lbl)
 
-    ax_lin_raw.set_title("RAW  Id vs Vd (linear)")
-    ax_log_raw.set_title("RAW  Id vs Vd (log |Id|)")
-    ax_lin_cor.set_title(f"MINUS Vg={base_step:g} V leakage  Id vs Vd (linear)")
-    ax_log_cor.set_title(f"MINUS Vg={base_step:g} V leakage  Id vs Vd (log |Id|)")
+    # Panel titles match the original single-device PNG ("<routine> (Linear)/
+    # (Log)"), with a tag marking the source row: the top row is the as-plotted
+    # input -- "Mirrored" for PMOS (the mirrored companion CSV feeds it), "Raw"
+    # for NMOS -- and the bottom row is the leakage-subtracted result.
+    source_tag = "Mirrored" if pmos else "Raw"
+    ax_lin_raw.set_title(f"{routine_name} ({source_tag}) (Linear)")
+    ax_log_raw.set_title(f"{routine_name} ({source_tag}) (Log)")
+    ax_lin_cor.set_title(f"{routine_name} (Subtracted Leakage) (Linear)")
+    ax_log_cor.set_title(f"{routine_name} (Subtracted Leakage) (Log)")
     for ax in (ax_log_raw, ax_log_cor):
         ax.set_yscale("log")
+    # Axis labels match the single-device plots: PMOS shows |Drain current| (A)
+    # (data plotted as measured); NMOS keeps "Drain current (A)". x is Vd (V).
+    ylabel = "|Drain current| (A)" if pmos else "Drain current (A)"
     for ax in axes.flat:
         ax.set_xlabel("Vd (V)")
-        ax.set_ylabel("Drain current (A)")
+        ax.set_ylabel(ylabel)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8)
-    # Match the device-loop PNGs: lead with "<device> <routine>" (device carries
-    # r<row>c<col>), then the raw-vs-subtracted description. When a full device
-    # descriptor is available, add it as a second line so the 2x2 carries the
-    # same flavor/row/col + W/L/nf labelling as the singular device plots.
-    title = (f"{device}  {routine_name}  --  raw (top) vs "
-             f"Vg={base_step:g} V leakage subtracted (bottom)")
+    # The geometry descriptor sits at the very top of the image (suptitle),
+    # matching the singular NMOS/PMOS device PNGs. The device/routine info now
+    # lives in the per-panel titles, so it is not repeated here.
     if subtitle:
-        title = f"{title}\n{subtitle}"
-    fig.suptitle(title, fontsize=11)
+        fig.suptitle(subtitle, fontsize=11)
     fig.savefig(out_png, dpi=200)
     plt.close(fig)
 
 
-def subtract_tree(targets, out_dir: Path | None = None) -> tuple[int, int]:
+def subtract_tree(targets, out_dir: Path | None = None,
+                  subtitle: str | None = None) -> tuple[int, int]:
     """Run self-subtraction over each target (CSV file or folder tree).
 
     Reusable entry point so run_device_loop.py can chain subtraction onto the
     measurement loop (one command) while the CLI main() below still works
     standalone. Returns (done, skipped). Only NMOS routine-0 ("Output WO Bulk")
     files are touched; everything else is reported and left alone.
+
+    subtitle: exact image suptitle to stamp on the 2x2 plot. run_device_loop
+    passes the SAME string it puts on the singular 1x1 device PNG so the two
+    plots carry an identical top line (flavor #, W/L/nf, measured date). Left
+    None for standalone CLI use, where the folder-derived device descriptor is
+    used instead.
     """
     if out_dir:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    done = skipped = 0
+    done = skipped = failed = 0
     for target in targets:
         for csv_path in find_target_csvs(Path(target)):
-            # PMOS OUTPUT only: run_device_loop writes a <stem>__mirrored.csv
-            # companion (sweep_value_v = pivot - Vd, drain_i_a unchanged) that
-            # matches the plotted x-axis. When it exists, drive BOTH the leaksub
-            # plot and the subtracted CSV from it, so the leakage output is in
-            # the same as-plotted x as the device's normal PMOS plot. NMOS files
-            # have no such companion, so this leaves them exactly as before. The
-            # subtracted Id values are identical either way -- subtraction is
-            # pointwise and matched on the sweep column, so mirroring the curve
-            # and its Vg=0 baseline together only relabels x. (Requested
-            # 2026-08-20: "for the leakage plot use the mirrored csv data".)
-            mirrored = csv_path.with_name(csv_path.stem + "__mirrored.csv")
-            is_pmos = mirrored.exists()  # only PMOS output gets a mirrored copy
-            src_csv = mirrored if is_pmos else csv_path
-            curves = load_output_curves(src_csv)
-            if not curves:  # not routine 0 -> already reported, left untouched
-                continue
-            # PMOS leakage floor = most-off gate (highest Vg step); NMOS = Vg=0.
-            base = baseline_from_curves(curves, pmos=is_pmos)
-            if base is None:
-                print(f"  SKIP {csv_path.name}: no Vg=0 V step in this file "
-                      f"(steps: {sorted(curves)}); cannot self-subtract.")
-                skipped += 1
-                continue
-            base_step, (base_xs, base_ys) = base
-            device = csv_path.parent.name  # leaf dir, e.g. nmos_hvt_r4c5
-            # Routine name straight from the CSV (same source the loop's PNG
-            # title uses), so the leaksub plot labels row/col + routine like
-            # the other plots. load_output_curves already gated on this being
-            # the Output routine, so it is populated.
-            routine_name = routine_name_of(src_csv) or OUTPUT_ROUTINE_NAME
-            # Output names keep the ORIGINAL stem (not "__mirrored") so the
-            # leaksub files sit beside the raw CSV as <stem>__leaksub.*.
-            dest = out_dir if out_dir else csv_path.parent
-            out_png = dest / f"{csv_path.stem}__leaksub.png"
-            out_csv = dest / f"{csv_path.stem}__leaksub.csv"
-            # Device descriptor from the ORIGINAL filename (the mirrored stem
-            # differs), so the 2x2 is labelled like the singular device plots.
-            subtitle = geometry_subtitle(csv_path)
-            plot_before_after(device, curves, base_xs, base_ys, base_step,
-                              out_png, routine_name=routine_name,
-                              subtitle=subtitle)
-            write_subtracted_csv(src_csv, base_xs, base_ys, base_step, out_csv)
-            note = " (from mirrored)" if src_csv is mirrored else ""
-            print(f"  {csv_path.name} -> {out_png.name}, {out_csv.name}{note}")
-            done += 1
+            # Per-file guard: one unreadable/malformed CSV must not abort the
+            # whole tree (added 2026-08-20). Before, a single failure here killed
+            # the leakage pass for every device after it, silently. Successful
+            # files are unaffected -- the body below is byte-identical to before,
+            # only wrapped. Skips (not-routine-0, no baseline) still `continue`.
+            try:
+                # PMOS OUTPUT only: run_device_loop writes a <stem>__mirrored.csv
+                # companion (sweep_value_v = pivot - Vd, drain_i_a unchanged) that
+                # matches the plotted x-axis. When it exists, drive BOTH the
+                # leaksub plot and the subtracted CSV from it, so the leakage
+                # output is in the same as-plotted x as the device's normal PMOS
+                # plot. NMOS files have no such companion, so this leaves them
+                # exactly as before. The subtracted Id values are identical either
+                # way -- subtraction is pointwise and matched on the sweep column,
+                # so mirroring the curve and its Vg=0 baseline together only
+                # relabels x. (Requested 2026-08-20: "for the leakage plot use the
+                # mirrored csv data".)
+                # PMOS-output devices get a <routine>_Mirrored.csv companion
+                # next to the <routine>_Raw.csv; its presence marks a PMOS file.
+                # csv_path is "<routine>_Raw.csv", so swap the _Raw suffix for
+                # _Mirrored to find it.
+                mirrored = csv_path.with_name(
+                    csv_path.name[:-len("_Raw.csv")] + "_Mirrored.csv")
+                is_pmos = mirrored.exists()  # only PMOS output gets a mirrored copy
+                src_csv = mirrored if is_pmos else csv_path
+                curves = load_output_curves(src_csv)
+                if not curves:  # not routine 0 -> already reported, left untouched
+                    continue
+                # PMOS leakage floor = most-off gate (highest Vg step); NMOS = Vg=0.
+                base = baseline_from_curves(curves, pmos=is_pmos)
+                if base is None:
+                    print(f"  SKIP {csv_path.name}: no Vg=0 V step in this file "
+                          f"(steps: {sorted(curves)}); cannot self-subtract.")
+                    skipped += 1
+                    continue
+                base_step, (base_xs, base_ys) = base
+                # Descriptor from the folder path (FLAVOR/width/length), since the
+                # short filename no longer carries geometry. Pure path parsing --
+                # no device_geometry import, so this module stays hardware-free.
+                # parents[0..2] = length, width, flavor dirs; reversed reads
+                # "NMOS_MID / 0.1um / L_30nm_NF_1".
+                path_parts = [p.name for p in list(csv_path.parents)[:3]][::-1]
+                device = " / ".join(path_parts) if path_parts else csv_path.parent.name
+                # Routine name straight from the CSV (same source the loop's PNG
+                # title uses), so the leaksub plot labels the routine like the
+                # other plots. load_output_curves already gated on this being the
+                # Output routine, so it is populated.
+                routine_name = routine_name_of(src_csv) or OUTPUT_ROUTINE_NAME
+                # Output name mirrors the loop's convention: the raw file is
+                # "<routine>_Raw", so its leakage result is
+                # "<routine>_Subtracted_Leakage.{png,csv}" beside it.
+                base_stem = csv_path.name[:-len("_Raw.csv")]  # e.g. Output_WO_Bulk
+                dest = out_dir if out_dir else csv_path.parent
+                out_png = dest / f"{base_stem}_Subtracted_Leakage.png"
+                out_csv = dest / f"{base_stem}_Subtracted_Leakage.csv"
+                # Suptitle sits at the very top of the image, matching the
+                # singular NMOS/PMOS device PNGs. When run_device_loop supplies
+                # its exact 1x1 suptitle, use it verbatim so both plots share an
+                # identical top line; otherwise (standalone CLI) fall back to the
+                # folder-derived device descriptor.
+                plot_before_after(device, curves, base_xs, base_ys, base_step,
+                                  out_png, routine_name=routine_name,
+                                  subtitle=(subtitle if subtitle is not None
+                                            else device),
+                                  pmos=is_pmos)
+                write_subtracted_csv(src_csv, base_xs, base_ys, base_step, out_csv)
+                note = " (from mirrored)" if src_csv is mirrored else ""
+                print(f"  {csv_path.name} -> {out_png.name}, {out_csv.name}{note}")
+                done += 1
+            except Exception as exc:  # noqa: BLE001 -- one file must not stop the rest
+                print(f"  ERROR {csv_path.name}: {type(exc).__name__}: {exc} "
+                      f"-- skipping this file, continuing.")
+                failed += 1
 
-    print(f"{done} device curve(s) corrected, {skipped} skipped")
+    tail = f", {failed} failed" if failed else ""
+    print(f"{done} device curve(s) corrected, {skipped} skipped{tail}")
     return done, skipped
 
 

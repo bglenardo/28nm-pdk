@@ -276,8 +276,8 @@ def save_iv_plot(points: list[RoutineMeasurement], routine_name: str,
                     lw=1.2, label=label)
     if subtitle:
         fig.suptitle(subtitle, fontsize=10)
-    ax_lin.set_title(f"{routine_name} (linear)")
-    ax_log.set_title(f"{routine_name} (log)")
+    ax_lin.set_title(f"{routine_name} (Linear)")
+    ax_log.set_title(f"{routine_name} (Log)")
     ax_log.set_yscale("log")
     # Axis labels: PMOS transfer -> Vg (V) / |Drain current| (A); PMOS output ->
     # |Drain current| (A). NMOS is left exactly as before (raw sweep_param,
@@ -326,12 +326,30 @@ def main() -> None:
                     help="which routine row(s) to run per device")
     ap.add_argument("--scan-port", required=True, help="Arduino serial port")
     ap.add_argument("--config", default="instrument_list.yaml")
-    ap.add_argument("--out", default="data/device_loop")
+    ap.add_argument("--out", default="data",
+                    help="base data directory; the per-run folder "
+                    "<board>_<chip>_<date>_<temp> is created inside it")
+    # Run identity -> names the top folder <board>_<chip>_<date>_<temp>. These
+    # change every bench run (new board/chip/temperature), so they are CLI flags
+    # rather than hardcoded. Date is filled in automatically (today) below.
+    ap.add_argument("--board", required=True, help="board number/name (run folder)")
+    ap.add_argument("--chip", required=True, help="chip number/name (run folder)")
+    ap.add_argument("--temp", required=True,
+                    help="temperature label for the run folder, e.g. 300K or 4K")
     ap.add_argument("--ignore-readback", action="store_true",
                     help="do not abort on high scan Mismatches counts. The "
                     "count tests only the Sout read-back path (Q1/Q2), never "
                     "selection; use when Sout read-back is known-broken and "
                     "selection is verified by the output-shape grader instead.")
+    ap.add_argument("--max-retries", type=int, default=3,
+                    help="on a per-(device,routine) failure (e.g. a high-Mismatches "
+                    "scan abort, Q2, or a transient serial/measurement error), "
+                    "re-send SEL and re-measure that same routine up to N times "
+                    "before giving up. It counts as FAILED only after all N "
+                    "attempts fail, then the loop advances to the next routine (or "
+                    "next device). Default 3. Bounded on purpose: a genuinely dead "
+                    "device (e.g. 35 mismatches from bad wiring) must not hang the "
+                    "run.")
     ap.add_argument("--live-plot", action="store_true",
                     help="show a live matplotlib window that draws each device's "
                     "IV curve point-by-point as it is measured, then auto-closes "
@@ -363,49 +381,87 @@ def main() -> None:
         if path not in routine_names:
             routine_names[path] = load_routines_csv(path)  # existing loader
         return routine_names[path]
-    out_root = Path(args.out)
+    measured_on = date.today().isoformat()  # YYYY-MM-DD, stamped on outputs
+    # Top-level run folder: <board>_<chip>_<date>_<temp>. Board/chip/temp come
+    # from the CLI (they change every run) and the date is auto-filled, so each
+    # run drops into its own dated folder under --out.
+    # Date in the run-folder name has no hyphens (20260820); measured_on keeps
+    # its ISO form (2026-08-20) for plot subtitles/other uses.
+    run_folder = f"C0{args.board}_C{args.chip}_{measured_on.replace('-', '')}_{args.temp}"
+    out_root = Path(args.out) / run_folder
     out_root.mkdir(parents=True, exist_ok=True)
+
+    # Run-level README (sits beside the flavor folders) recording the fixed gate-
+    # park rail settings for this run. Written once: skipped if one already
+    # exists so a resumed run never overwrites/duplicates it.
+    readme = out_root / "README.txt"
+    if not readme.exists():
+        readme.write_text("Settings: Vgxp: 1V , Vgxn: -0.1V\n")
 
     scan = open_scan_arduino(args.scan_port)
     print(f"{len(devices)} devices x {len(args.routine_index)} routines "
           f"-> {out_root}")
-
-    measured_on = date.today().isoformat()  # YYYY-MM-DD, stamped on outputs
     done = skipped = failed = suspect = 0
     for flavor, row, col in devices:
-        kind = device_registry.kind_of(flavor)  # "nmos" | "pmos" -> subfolder
         dev_name = f"{device_registry.name_of(flavor)}_r{row}c{col}"
         # Geometry label for the plot (flavor #, W, L, nf), per output spec.
         geo_label = device_geometry.label(flavor, row, col)
+        # Cosmetic-only title-case for the PNG suptitle: capitalize the plain-
+        # English words and uppercase the flavor name (matching the folder
+        # convention, e.g. NMOS_MID). Unit tokens (W=0.1um, L=30nm, nf=1) are
+        # left untouched -- a blanket title-case would mangle them. This does
+        # NOT alter device_geometry.label(), whose raw form is slugified into
+        # filenames by leakage_subtract.
+        flavor_name = device_registry.name_of(flavor)
+        geo_label_display = (geo_label
+                             .replace("flavor ", "Flavor ")
+                             .replace(f"({flavor_name})", f"({flavor_name.upper()})"))
         # Route to the correct-polarity routine file for this flavor's type.
         routines_path = str(device_registry.routine_file_for(
             flavor, nmos_path=nmos_routines, pmos_path=pmos_routines))
         routines = routines_for(routines_path)
-        # Output layout: data/<out>/<nmos|pmos>/<device>/ with dated filenames.
-        dev_dir = out_root / kind / dev_name
+        # Output layout (geometry hierarchy):
+        #   <run>/<FLAVOR>/<width>/<length>_NF_<nf>/<stem>...
+        # The flavor name is uppercased (e.g. NMOS_MID); width/length keep their
+        # lowercase units (0.1um, 30nm) but the finger count is tagged NF_<n>.
+        # geometry_of() returns w_um AFTER the L=1um DRC cap (3->2.65um), so the
+        # widest-row L=1um devices correctly land in a 2.65um/ folder.
+        geo = device_geometry.geometry_of(flavor, row, col)
+        flavor_dir = device_registry.name_of(flavor).upper()
+        width_dir = f"W_{geo.w_um:g}um"
+        length_dir = f"L_{geo.l_nm}nm_NF_{geo.nf}"
+        dev_dir = out_root / flavor_dir / width_dir / length_dir
         for ridx in args.routine_index:
             rname = routines[ridx].name.replace(" ", "_")
-            # Label the stem with the device so each CSV names the device it
-            # measured and stays paired with its PNG (same stem). The CSV writer
-            # itself is reuse-only (routines.py), so the label lives in the
-            # filename: <device>_<geo>_<routine>_<date>. Geometry (W/L/nf) is
-            # sanitized to a filename-safe token.
-            geo_token = "-".join(
-                t for t in ("".join(ch if ch.isalnum() else " "
-                                    for ch in geo_label)).split())
-            stem = f"{dev_name}__{geo_token}__{rname}_{measured_on}"
-            csv_path = dev_dir / f"{stem}.csv"
-            png_path = dev_dir / f"{stem}.png"
-            # Resume: skip if this device+routine already has ANY dated CSV.
-            # Glob matches the new stem shape (device__geo__routine_date) on any
-            # date, so a re-run into the same --out still resumes correctly.
-            if dev_dir.exists() and any(
-                    dev_dir.glob(f"{dev_name}__*__{rname}_*.csv")):
+            # Short, content-descriptive filenames. The device and its geometry
+            # are already encoded by the folder path (<FLAVOR>/<width>/L_..NF_..),
+            # so each file only needs to state its routine + what it holds:
+            #   <routine>_Raw.csv / .png          raw as-measured data + plot
+            #   <routine>_Mirrored.csv            PMOS-output as-plotted copy (below)
+            #   <routine>_Subtracted_Leakage.*    leakage pass (leakage_subtract)
+            csv_path = dev_dir / f"{rname}_Raw.csv"
+            png_path = dev_dir / f"{rname}_Raw.png"
+            # Resume: skip if this device+routine already has its raw CSV. The
+            # name is fixed (no date/geo token), so a re-run into the same run
+            # folder still resumes where it stopped.
+            if csv_path.exists():
                 skipped += 1
                 continue
-            print(f"[{done + skipped + failed + 1}] {kind}/{dev_name} :: "
+            print(f"[{done + skipped + failed + 1}] "
+                  f"{flavor_dir}/{width_dir}/{length_dir} ({dev_name}) :: "
                   f"{rname}  ({geo_label})")
-            try:
+            # Retry the whole select+measure for this (device, routine) up to
+            # --max-retries times. Any failure (high-Mismatches scan abort per
+            # Q2, transient serial/measurement error) re-sends SEL and re-runs;
+            # the first attempt that writes _Raw.csv wins and breaks the loop.
+            # Only after all attempts fail does it count as FAILED, and the outer
+            # loops then advance to the next routine (or device). Bounded so a
+            # genuinely dead device can't hang the overnight run.
+            for attempt in range(args.max_retries):
+              try:
+                if attempt:
+                    print(f"    retry {attempt}/{args.max_retries - 1} "
+                          f"(previous attempt failed)")
                 select_device(scan, flavor, row, col,
                               ignore_readback=args.ignore_readback)
                 # Live plot: reuse run_routine.py's LiveRoutinePlot unchanged.
@@ -454,25 +510,35 @@ def main() -> None:
                 write_routine_measurements_csv(csv_path, points)  # existing
                 # PMOS OUTPUT only: also write an "as-plotted" CSV whose
                 # sweep_value_v is mirrored exactly like the PNG (pivot - Vd).
-                # The main CSV above stays the raw as-measured "before" copy;
-                # this <stem>__mirrored.csv is the "after" copy that matches the
-                # plotted curve. Same reused writer, so both files share format.
+                # The _Raw CSV above stays the raw as-measured "before" copy;
+                # this <routine>_Mirrored.csv is the "after" copy that matches
+                # the plotted curve. Same reused writer, so both share format.
                 is_pmos_flavor = device_registry.is_pmos(flavor)
                 if is_pmos_flavor and spec.sweep_param == "Vd":
                     mirrored = mirror_points_for_plot(
                         points, spec.sweep_param, pmos=True)
                     write_routine_measurements_csv(
-                        dev_dir / f"{stem}__mirrored.csv", mirrored)
+                        dev_dir / f"{rname}_Mirrored.csv", mirrored)
+                    # The saved plot for PMOS output IS mirrored (save_iv_plot
+                    # reflects x about the sweep midpoint under this exact
+                    # condition), so name the PNG _Mirrored to match. NMOS and the
+                    # PMOS transfer (Vg-sweep) plot are not mirrored -> stay _Raw.
+                    png_path = dev_dir / f"{rname}_Mirrored.png"
                 # PMOS Vg-sweep transfer routine is titled "Ids vs Vgs" (device
-                # prefix kept). NMOS and the Vd-sweep output family keep the
-                # routine name unchanged.
+                # prefix kept). The Vd-sweep output family (routine 0, "Output
+                # WO Bulk") uses only the routine name -- no device prefix -- so
+                # the panels read "Output WO Bulk (Linear)/(Log)". The device
+                # geometry still appears in the suptitle. Applies to NMOS and PMOS.
                 plot_title = (f"{dev_name} Ids vs Vgs"
                               if (is_pmos_flavor
                                   and spec.sweep_param == "Vg")
-                              else f"{dev_name} {spec.name}")
+                              else spec.name)
+                # Single top line for this device; reused verbatim below for the
+                # 2x2 leakage plot so both PNGs carry an identical suptitle.
+                plot_subtitle = f"{geo_label_display}  |  Measured {measured_on}"
                 save_iv_plot(points, plot_title,
                              spec.sweep_param, spec.step_param, png_path,
-                             subtitle=f"{geo_label}  |  measured {measured_on}",
+                             subtitle=plot_subtitle,
                              # Source-reference the plot for PMOS flavors so the
                              # 0.9->0 sweep reads as a normal first-quadrant
                              # family. Detected from the flavor via the registry
@@ -480,15 +546,15 @@ def main() -> None:
                              # file, so it is correct however the device is routed.
                              pmos=is_pmos_flavor)
                 # Grade the shape (Q8). Data is always kept; a bad shape is
-                # flagged, not discarded, so it can't masquerade as a good run.
+                # flagged in the console + summary counters, not discarded, so it
+                # can't masquerade as a good run. (Per request the on-disk
+                # .verdict/.SUSPECT text sidecars are no longer written -- the
+                # deepest folder holds only CSV/PNG.)
                 verdict = grade_output_family(points, compliance_a=compliance_a)
-                (dev_dir / f"{stem}.verdict.txt").write_text(str(verdict))
                 if verdict.ok:
                     done += 1
                 else:
                     suspect += 1
-                    (dev_dir / f"{stem}.SUSPECT.txt").write_text(
-                        "\n".join(verdict.reasons))
                     print(f"    SUSPECT: {'; '.join(verdict.reasons)}")
                 # Leakage self-subtraction, scoped to THIS device's folder only
                 # (never the whole --out tree, which would re-render every prior
@@ -497,12 +563,20 @@ def main() -> None:
                 # __leaksub PNG/CSV appear beside the raw files right now instead
                 # of in a separate trailing pass. Cost is one extra plot render
                 # (~1 s), negligible next to the per-device measurement time.
-                subtract_tree([dev_dir])
-            except Exception as exc:  # noqa: BLE001 -- one device must not
-                failed += 1           # kill the overnight loop
-                print(f"    FAILED: {exc} -- continuing with next device")
-                dev_dir.mkdir(parents=True, exist_ok=True)
-                (dev_dir / f"{stem}.FAILED.txt").write_text(str(exc))
+                subtract_tree([dev_dir], subtitle=plot_subtitle)
+                break  # success (incl. SUSPECT: data written) -- stop retrying
+              except Exception as exc:  # noqa: BLE001 -- one device must not
+                # kill the overnight loop. Retry this (device, routine) up to
+                # --max-retries; only the final failed attempt counts as FAILED
+                # and lets the loop advance to the next routine (or device).
+                # Per request no .FAILED.txt sidecar is written to the folder.
+                if attempt == args.max_retries - 1:
+                    failed += 1
+                    print(f"    FAILED after {args.max_retries} attempts: {exc} "
+                          "-- continuing with next routine/device")
+                else:
+                    print(f"    attempt {attempt + 1}/{args.max_retries} failed: "
+                          f"{exc} -- retrying")
                 time.sleep(1.0)
 
     print(f"finished: {done} done, {skipped} skipped (already had CSV), "
