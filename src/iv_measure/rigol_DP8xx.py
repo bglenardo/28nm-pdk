@@ -5,6 +5,8 @@ from typing import Literal
 
 import pyvisa
 
+from iv_measure.serial_instrument import open_visa_resource_manager
+
 RigolChannel = Literal["CH1", "CH2", "CH3"]
 _VALID_CHANNELS = {"CH1", "CH2", "CH3"}
 
@@ -28,7 +30,7 @@ class RigolDP8xx:
         # Allow an external ResourceManager to be shared/injected (e.g. so a
         # caller can list/reuse one instance across multiple instruments);
         # otherwise create our own.
-        self._rm = self.resource_manager or pyvisa.ResourceManager()
+        self._rm = self.resource_manager or open_visa_resource_manager()
         self._instrument: pyvisa.resources.MessageBasedResource | None = None
 
     def open(self) -> None:

@@ -1,22 +1,12 @@
 instruments:
-  keithley_2400:
+  keithley_2401:
     type: Keithley2400
-    port: COM7
+    resource_name: "GPIB0::24::INSTR"
     quantity: Vd
-    baudrate: 9600
-    timeout_s: 1.0
-    bytesize: 8
-    parity: "N"
-    stopbits: 1
-    read_termination: "\r"
-    write_termination: "\r"
-    current_compliance_a: 0.01
 
   keithley_e3631a_a:
     type: E3631A
-    port: COM5
-    baudrate: 9600
-    timeout_s: 1.0
+    resource_name: "GPIB1::5::INSTR"
     channel_map:
       P6V: Vb
       P25V: Vg
@@ -24,10 +14,10 @@ instruments:
 
   keithley_e3631a_b:
     type: E3631A
-    port: COM10
+    port: COM6
     baudrate: 9600
     timeout_s: 1.0
-    # Manual-only rails; software intentionally does not drive these fixed channels.
+    # Manual-only primary rails: do not enable them from software.
     channel_map:
       P6V: 0.9V
       P25V: 1.8V
@@ -35,7 +25,7 @@ instruments:
 
   bk_9132c:
     type: 9132C
-    port: None
+    port: COM10
     baudrate: 9600
     timeout_s: 1.0
     bytesize: 8
@@ -45,19 +35,32 @@ instruments:
     read_termination: "\n"
     set_voltage_cmd: "APPL {channel}, {value:.6f}, {current_limit_a:.6f}"
     current_limit_a: 0.1
-    # BK is disabled for routines in this setup.
     channel_map:
-      CH1: None
-      CH2: None
+      CH1: vgxn
+      CH2: vgxp
       CH3: None
-      
-  rigol_dp8xx_a:
-    type: RigolDP8xx
-    resource_name: USB0::0x1AB1::0x0E11::DP8F262800251::INSTR
-    timeout_ms: 5000
-    current_limit_a: 0.1
-    # Fixed auxiliary rails, mirroring the manual values from the old script.
-    channel_map:
-      CH1: 0.9V
-      CH2: 1.8V
-      CH3: None
+
+  hp34401a_1v8:
+    type: HP34401A
+    port: COM8
+    baudrate: 9600
+    timeout_s: 1.0
+    bytesize: 8
+    parity: "N"
+    stopbits: 1
+    read_termination: "\n"
+    write_termination: "\n"
+    measure_current_cmd: "MEAS:CURR:DC?"
+    current_meter: true
+    sample_every_n_points: 10
+
+  arduino_device_switch:
+    type: Arduino
+    model: NANO_R4
+    port: COM14
+    # Unified sketch (Arduino/unified_scan_select) runs at 115200 baud.
+    baudrate: 115200
+    timeout_s: 1.0
+    ack_timeout_s: 3.0
+    # Firmware requires four fields: flavor, row, col, chip.
+    device_select_cmd: "SEL,{flavor_idx},{row_idx},{col_idx},{chip_idx}\n"

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 import math
 import re
 import sys
@@ -96,12 +96,29 @@ class LiveRoutinePlot:
     def finalize(self) -> None:
         if plt.fignum_exists(self._figure.number):
             plt.ioff()
-            plt.show(block=True)
+            plt.show(block=False)
+            plt.close(self._figure)
+
+
+def _is_serial_port_name(value: str | None) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    upper = text.upper()
+    if "::" in text or upper.startswith(("GPIB", "USB", "ASRL", "TCPIP")):
+        return False
+    return True
+
+
+def _serial_port_names(values: list[str | None]) -> list[str]:
+    return [str(value).strip() for value in values if _is_serial_port_name(value)]
 
 
 def reset_serial_ports(ports: list[str]) -> None:
     """Attempt to close any open connections on the given ports to reset them."""
-    for port in ports:
+    for port in _serial_port_names(ports):
         try:
             ser = serial.Serial(port, timeout=0.1)
             ser.reset_input_buffer()
@@ -111,6 +128,95 @@ def reset_serial_ports(ports: list[str]) -> None:
         except Exception as e:
             print(f"Reset failed for {port}: {e}")
     time.sleep(2.0)  # Longer pause for Windows to fully release resources
+
+
+@dataclass
+class ArduinoDeviceSelector:
+    port: str
+    baudrate: int = 115200
+    model: str = "Arduino"
+    device_select_cmd: str = "SEL,{flavor_idx},{row_idx},{col_idx},{chip_idx}\n"
+    ack_timeout_s: float = 2.0
+    _serial: serial.Serial | None = field(default=None, init=False, repr=False)
+
+    def open(self) -> None:
+        self._serial = serial.Serial(self.port, self.baudrate, timeout=self.ack_timeout_s)
+        # The Nano R4 resets when the port opens and prints a boot banner ending
+        # in "READY"; wait briefly and drain it so it is not mistaken for an ack.
+        time.sleep(2.0)
+        if self._serial.in_waiting > 0:
+            self._serial.read(self._serial.in_waiting)
+
+    def close(self) -> None:
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            finally:
+                self._serial = None
+
+    def select_device(self, flavor_idx: int, row_idx: int, col_idx: int, chip_idx: int = 1) -> str:
+        if self._serial is None:
+            self.open()
+
+        self._serial.reset_input_buffer()
+        command = self.device_select_cmd.format(
+            flavor_idx=flavor_idx,
+            row_idx=row_idx,
+            col_idx=col_idx,
+            chip_idx=chip_idx,
+        )
+        self._serial.write(command.encode("ascii"))
+        self._serial.flush()
+
+        deadline = time.time() + self.ack_timeout_s
+        buffer = b""
+        while time.time() < deadline:
+            if self._serial.in_waiting > 0:
+                buffer += self._serial.read(self._serial.in_waiting)
+                # The unified sketch ends a SEL with "SEL_DONE" (or "SEL_FAIL").
+                if b"SEL_DONE" in buffer or b"SEL_FAIL" in buffer or b"ERR" in buffer:
+                    break
+            else:
+                time.sleep(0.01)
+
+        ack = buffer.decode(errors="ignore").strip()
+        if "SEL_DONE" not in ack:
+            raise RuntimeError(f"Arduino did not confirm device selection (expected SEL_DONE), got: {ack!r}")
+        return ack
+
+
+def _load_arduino_switcher(config_path: str | Path) -> ArduinoDeviceSelector | None:
+    """Read the optional Arduino device-selection instrument from the YAML config."""
+    raw = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        return None
+
+    instruments = raw.get("instruments")
+    if not isinstance(instruments, dict):
+        return None
+
+    for name, cfg in instruments.items():
+        if not isinstance(cfg, dict):
+            continue
+
+        type_name = str(cfg.get("type", "")).strip().upper()
+        model_name = str(cfg.get("model", "")).strip().upper()
+        if type_name not in {"ARDUINO", "ARDUINO_NANO", "ARDUINO_NANO_R4", "NANO", "NANO_R4"} and model_name not in {"NANO", "NANO_R4", "ARDUINO"}:
+            continue
+
+        port = str(cfg.get("port", "")).strip()
+        if not port:
+            continue
+
+        return ArduinoDeviceSelector(
+            port=port,
+            baudrate=int(cfg.get("baudrate", 115200)),
+            model=str(cfg.get("model", type_name or "Arduino")).strip() or "Arduino",
+            device_select_cmd=str(cfg.get("device_select_cmd", "SEL,{flavor_idx},{row_idx},{col_idx},{chip_idx}\n")),
+            ack_timeout_s=float(cfg.get("ack_timeout_s", cfg.get("timeout_s", 2.0))),
+        )
+
+    return None
 
 
 def _parse_voltage_literal(text: str) -> float | None:
@@ -142,7 +248,7 @@ def _enable_aux_fixed_e3631a(config_path: str | Path, in_use_ports: set[str]) ->
             continue
 
         port = str(cfg.get("port", "")).strip()
-        if not port or port in in_use_ports:
+        if not _is_serial_port_name(port) or port in in_use_ports:
             continue
 
         channel_map = cfg.get("channel_map")
@@ -214,6 +320,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="0-based routine index from the CSV to run as the single routine (default: 0).",
     )
     parser.add_argument(
+        "--device-flavor",
+        type=int,
+        default=None,
+        help="Optional Arduino device-selection flavor index to choose before the routine starts.",
+    )
+    parser.add_argument(
+        "--device-row",
+        type=int,
+        default=None,
+        help="Optional Arduino device-selection row index to choose before the routine starts.",
+    )
+    parser.add_argument(
+        "--device-col",
+        type=int,
+        default=None,
+        help="Optional Arduino device-selection column index to choose before the routine starts.",
+    )
+    parser.add_argument(
+        "--device-chip",
+        type=int,
+        default=1,
+        help="Arduino scan-chain chip index (1 or 2) used when selecting a device (default: 1).",
+    )
+    parser.add_argument(
         "--no-live-plot",
         action="store_true",
         help="Disable the live matplotlib plot during acquisition.",
@@ -249,6 +379,13 @@ def main() -> None:
             source_voltage_range_v=2.0,
         )
         config = replace(config, drain_source=replace(config.drain_source, init_commands=init_commands))
+    arduino_switcher = _load_arduino_switcher(args.config)
+    if any(v is not None for v in (args.device_flavor, args.device_row, args.device_col)):
+        if args.device_flavor is None or args.device_row is None or args.device_col is None:
+            raise ValueError("--device-flavor, --device-row, and --device-col must be provided together to switch devices.")
+        if arduino_switcher is None:
+            raise ValueError("No Arduino selector was found in the config file; add an arduino entry to instrument_list.yaml.")
+
     routine_specs = load_routines_csv(args.routines_csv)
     if args.routine_index < 0 or args.routine_index >= len(routine_specs):
         raise ValueError(f"routine_index {args.routine_index} out of range [0, {len(routine_specs) - 1}]")
@@ -259,12 +396,14 @@ def main() -> None:
         sweep_param=selected_routine.sweep_param,
     )
     
-    # Reset/close any lingering connections on the ports
-    ports_to_reset = [config.gate_source.port, config.drain_source.port]
-    if config.bulk_source:
-        ports_to_reset.append(config.bulk_source.port)
+    # Reset/close any lingering serial connections; ignore VISA/GPIB resource strings.
+    ports_to_reset = _serial_port_names([
+        config.gate_source.port,
+        config.drain_source.port,
+        config.bulk_source.port if config.bulk_source else None,
+    ])
     for _, src_cfg in config.quantity_sources.items():
-        if src_cfg.port not in ports_to_reset:
+        if _is_serial_port_name(src_cfg.port) and src_cfg.port not in ports_to_reset:
             ports_to_reset.append(src_cfg.port)
     reset_serial_ports(ports_to_reset)
     time.sleep(0.5)  # Brief pause after reset
@@ -272,6 +411,10 @@ def main() -> None:
     aux_supplies = _enable_aux_fixed_e3631a(args.config, set(ports_to_reset))
     
     try:
+        if arduino_switcher is not None and any(v is not None for v in (args.device_flavor, args.device_row, args.device_col)):
+            ack = arduino_switcher.select_device(args.device_flavor, args.device_row, args.device_col, args.device_chip)
+            print(f"Arduino selector {arduino_switcher.model} on {arduino_switcher.port}: ack={ack!r}")
+
         routine, points = run_single_routine_from_csv(
             config=config,
             routines_csv=args.routines_csv,
@@ -282,6 +425,8 @@ def main() -> None:
         )
         write_routine_measurements_csv(args.output_csv, points)
     finally:
+        if arduino_switcher is not None:
+            arduino_switcher.close()
         for supply in aux_supplies:
             try:
                 supply.output_off()

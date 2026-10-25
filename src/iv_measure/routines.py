@@ -51,6 +51,7 @@ class RoutineMeasurement:
     vgxp_v: float
     vgxn_v: float
     drain_i_a: float
+    supply_i_a: float | None = None
 
 
 PointCallback = Callable[[RoutineMeasurement], None]
@@ -107,6 +108,7 @@ def run_routines_from_csv(
     results: list[RoutineMeasurement] = []
 
     device_pool, gate, drain, bulk = _open_device_pool(config)
+    current_meter = _open_current_meter(config)
     controls = _build_quantity_controls(config, gate, drain, bulk, device_pool)
 
     try:
@@ -138,6 +140,7 @@ def run_routines_from_csv(
 
                     time.sleep(config.sweep.settle_s)
                     drain_i = _measure_current_a(drain)
+                    supply_i = _read_supply_current(current_meter, results, config.sample_every_n_points)
 
                     measurement = RoutineMeasurement(
                         routine=routine.name,
@@ -152,6 +155,7 @@ def run_routines_from_csv(
                         vgxp_v=biases["vgxp"],
                         vgxn_v=biases["vgxn"],
                         drain_i_a=drain_i,
+                        supply_i_a=supply_i,
                     )
                     results.append(measurement)
                     if point_callback is not None:
@@ -163,6 +167,8 @@ def run_routines_from_csv(
             _output_off(device)
             _force_bk9132c_off(device)
             device.close()
+        if current_meter is not None:
+            current_meter.close()
 
     return results
 
@@ -186,6 +192,7 @@ def run_single_routine_from_csv(
         raise ValueError("ids_settle_s must be >= 0")
 
     device_pool, gate, drain, bulk = _open_device_pool(config)
+    current_meter = _open_current_meter(config)
     controls = _build_quantity_controls(config, gate, drain, bulk, device_pool)
     current_biases: dict[str, float] = {}
 
@@ -254,6 +261,7 @@ def run_single_routine_from_csv(
 
                 time.sleep(effective_ids_settle_s)
                 drain_i = _measure_current_a(drain)
+                supply_i = _read_supply_current(current_meter, results, config.sample_every_n_points)
 
                 measurement = RoutineMeasurement(
                     routine=selected_routine.name,
@@ -268,6 +276,7 @@ def run_single_routine_from_csv(
                     vgxp_v=biases["vgxp"],
                     vgxn_v=biases["vgxn"],
                     drain_i_a=drain_i,
+                    supply_i_a=supply_i,
                 )
                 results.append(measurement)
                 if point_callback is not None:
@@ -279,6 +288,8 @@ def run_single_routine_from_csv(
             _output_off(device)
             _force_bk9132c_off(device)
             device.close()
+        if current_meter is not None:
+            current_meter.close()
 
     return selected_routine, results
 
@@ -321,6 +332,7 @@ def write_routine_measurements_csv(path: str | Path, points: list[RoutineMeasure
                 "vgxp_v",
                 "vgxn_v",
                 "drain_i_a",
+                "supply_i_a",
             ]
         )
         for p in points:
@@ -338,6 +350,7 @@ def write_routine_measurements_csv(path: str | Path, points: list[RoutineMeasure
                     p.vgxp_v,
                     p.vgxn_v,
                     p.drain_i_a,
+                    p.supply_i_a,
                 ]
             )
 
@@ -482,6 +495,33 @@ def _clear_status(device: SerialInstrument) -> None:
         device.send_scpi("*CLS")
     except InstrumentError:
         pass
+
+
+def _open_current_meter(config: ProjectConfig) -> SerialInstrument | None:
+    if config.current_meter is None:
+        return None
+
+    device = SerialInstrument(config.current_meter)
+    device.open()
+    return device
+
+
+def _read_supply_current(
+    device: SerialInstrument | None,
+    results: list[RoutineMeasurement],
+    sample_every_n_points: int,
+) -> float | None:
+    if device is None or sample_every_n_points <= 0:
+        return None
+
+    sample_index = len(results) + 1
+    if sample_index % sample_every_n_points != 0:
+        return None
+
+    try:
+        return _measure_current_a(device)
+    except InstrumentError:
+        return None
 
 
 def _measure_current_a(device: SerialInstrument) -> float:
@@ -725,9 +765,10 @@ def _build_quantity_controls(
 
 
 def _device_key(config: SerialDeviceConfig) -> str:
+    resource_key = config.resource_name or config.port
     return "|".join(
         [
-            config.port,
+            resource_key,
             str(config.baudrate),
             str(config.bytesize),
             config.parity,

@@ -11,7 +11,8 @@ import yaml
 @dataclass(frozen=True)
 class SerialDeviceConfig:
     name: str
-    port: str
+    port: str = ""
+    resource_name: str | None = None
     baudrate: int = 9600
     timeout_s: float = 1.0
     bytesize: int = 8
@@ -23,6 +24,7 @@ class SerialDeviceConfig:
     init_commands: tuple[str, ...] = ()
     current_compliance_a: float | None = None
     measure_current_cmd: str | None = "MEAS:CURR?"
+    sample_every_n_points: int = 10
     output_on_cmd: str | None = "OUTP ON"
     output_off_cmd: str | None = "OUTP OFF"
 
@@ -43,6 +45,8 @@ class ProjectConfig:
     drain_source: SerialDeviceConfig
     bulk_source: SerialDeviceConfig | None
     quantity_sources: dict[str, SerialDeviceConfig]
+    current_meter: SerialDeviceConfig | None
+    sample_every_n_points: int
     sweep: SweepConfig
 
 
@@ -63,6 +67,8 @@ def load_project_config(path: str | Path) -> ProjectConfig:
         raise ValueError("Config must contain an 'instruments' mapping")
 
     quantity_sources = _collect_quantity_sources(instruments)
+    current_meter = _resolve_optional_current_meter(instruments)
+    sample_every_n_points = current_meter.sample_every_n_points if current_meter is not None else _sample_every_n_points(raw)
 
     assignments = raw.get("assignments")
     if isinstance(assignments, dict):
@@ -97,6 +103,8 @@ def load_project_config(path: str | Path) -> ProjectConfig:
         drain_source=drain,
         bulk_source=bulk,
         quantity_sources=quantity_sources,
+        current_meter=current_meter,
+        sample_every_n_points=sample_every_n_points,
         sweep=sweep_cfg,
     )
 
@@ -105,12 +113,16 @@ def _parse_serial(name: str, raw: Any) -> SerialDeviceConfig:
     if not isinstance(raw, dict):
         raise ValueError(f"instruments.{name} must be a mapping")
 
-    if "port" not in raw:
-        raise ValueError(f"instruments.{name}.port is required")
+    if "port" not in raw and "resource_name" not in raw:
+        raise ValueError(f"instruments.{name} requires either 'port' or 'resource_name'")
+
+    resource_name = raw.get("resource_name")
+    port = str(raw.get("port") or (resource_name if resource_name else ""))
 
     return SerialDeviceConfig(
         name=name,
-        port=str(raw["port"]),
+        port=port,
+        resource_name=str(resource_name) if resource_name is not None else None,
         baudrate=int(raw.get("baudrate", 9600)),
         timeout_s=float(raw.get("timeout_s", 1.0)),
         bytesize=int(raw.get("bytesize", 8)),
@@ -192,8 +204,11 @@ def _collect_typed_quantity_sources(instruments: dict[str, Any]) -> dict[str, Se
             channel_map = _typed_channel_map(raw, instrument_name)
             command_template = "APPL {channel}, {value:.6f}, {current_limit_a:.6f}"
             current_limit_a = float(raw.get("current_limit_a", 0.1))
+            resource_name = raw.get("resource_name")
+            port = str(raw.get("port") or (resource_name if resource_name else ""))
             base_cfg = {
-                "port": str(raw["port"]),
+                "port": port,
+                "resource_name": str(resource_name) if resource_name is not None else None,
                 "baudrate": int(raw.get("baudrate", 9600)),
                 "timeout_s": float(raw.get("timeout_s", 1.0)),
                 "bytesize": 8,
@@ -258,6 +273,7 @@ def _collect_typed_quantity_sources(instruments: dict[str, Any]) -> dict[str, Se
             sources[mapped_text] = SerialDeviceConfig(
                 name=f"{instrument_name}:{str(channel).strip()}",
                 port=base_cfg["port"],
+                resource_name=base_cfg.get("resource_name"),
                 baudrate=base_cfg["baudrate"],
                 timeout_s=base_cfg["timeout_s"],
                 bytesize=base_cfg["bytesize"],
@@ -296,6 +312,68 @@ def _collect_quantity_sources(instruments: dict[str, Any]) -> dict[str, SerialDe
     return sources
 
 
+def _resolve_optional_current_meter(instruments: dict[str, Any]) -> SerialDeviceConfig | None:
+    for instrument_name, raw in instruments.items():
+        if not isinstance(raw, dict):
+            continue
+
+        type_name = str(raw.get("type", "")).strip().upper()
+        is_current_meter = (
+            bool(raw.get("current_meter", False))
+            or str(raw.get("role", "")).strip().lower() in {"current_meter", "supply_current", "power_supply_current"}
+            or str(raw.get("measurement", "")).strip().lower() in {"current_meter", "supply_current", "power_supply_current"}
+            or type_name in {"HP34401A", "34401A", "AGILENT34401A", "AGILENT_34401A"}
+        )
+        if not is_current_meter:
+            continue
+
+        return _parse_hp34401a(instrument_name, raw)
+
+    return None
+
+
+def _sample_every_n_points(raw: dict[str, Any]) -> int:
+    value = raw.get("sample_every_n_points", raw.get("monitor_every_n_points", 10))
+    return _coerce_sample_interval(value)
+
+
+def _coerce_sample_interval(value: Any) -> int:
+    try:
+        interval = int(value)
+    except (TypeError, ValueError):
+        return 10
+    return interval if interval > 0 else 10
+
+
+def _parse_hp34401a(instrument_name: str, raw: dict[str, Any]) -> SerialDeviceConfig:
+    if "port" not in raw and "resource_name" not in raw:
+        raise ValueError(f"instruments.{instrument_name} requires either 'port' or 'resource_name'")
+
+    sample_every_n_points = _coerce_sample_interval(raw.get("sample_every_n_points", raw.get("monitor_every_n_points", 10)))
+    resource_name = raw.get("resource_name")
+    port = str(raw.get("port") or (resource_name if resource_name else ""))
+
+    return SerialDeviceConfig(
+        name=instrument_name,
+        port=port,
+        resource_name=str(resource_name) if resource_name is not None else None,
+        baudrate=int(raw.get("baudrate", 9600)),
+        timeout_s=float(raw.get("timeout_s", 1.0)),
+        bytesize=int(raw.get("bytesize", 8)),
+        parity=str(raw.get("parity", "N")),
+        stopbits=float(raw.get("stopbits", 1.0)),
+        read_termination=str(raw.get("read_termination", "\n")),
+        write_termination=str(raw.get("write_termination", "\n")),
+        set_voltage_cmd=str(raw.get("set_voltage_cmd", "")),
+        init_commands=tuple(_str_list(raw.get("init_commands", []))),
+        current_compliance_a=None,
+        measure_current_cmd=_none_or_str(raw.get("measure_current_cmd", "MEAS:CURR:DC?")),
+        sample_every_n_points=sample_every_n_points,
+        output_on_cmd=None,
+        output_off_cmd=None,
+    )
+
+
 def _typed_channel_map(raw: dict[str, Any], instrument_name: str) -> dict[str, Any]:
     channel_map = raw.get("channel_map")
     if isinstance(channel_map, dict):
@@ -317,17 +395,20 @@ def _parse_keithley2400_for_role(role_name: str, instrument_name: str, raw: dict
 
 
 def _parse_keithley2400(instrument_name: str, raw: dict[str, Any]) -> SerialDeviceConfig:
-    if "port" not in raw:
-        raise ValueError(f"instruments.{instrument_name}.port is required")
+    if "port" not in raw and "resource_name" not in raw:
+        raise ValueError(f"instruments.{instrument_name} requires either 'port' or 'resource_name'")
 
     from iv_measure.keithley2400 import build_voltage_source_init_commands
 
     current_compliance_a = float(raw.get("current_compliance_a", 0.01))
     init_commands = build_voltage_source_init_commands(current_compliance_a=current_compliance_a)
+    resource_name = raw.get("resource_name")
+    port = str(raw.get("port") or (resource_name if resource_name else ""))
 
     return SerialDeviceConfig(
         name=instrument_name,
-        port=str(raw["port"]),
+        port=port,
+        resource_name=str(resource_name) if resource_name is not None else None,
         baudrate=int(raw.get("baudrate", 9600)),
         timeout_s=float(raw.get("timeout_s", 1.0)),
         bytesize=int(raw.get("bytesize", 8)),
@@ -358,8 +439,8 @@ def _role_quantity(role_name: str) -> str:
 
 
 def _parse_e3631a_for_role(role_name: str, instrument_name: str, raw: dict[str, Any]) -> SerialDeviceConfig:
-    if "port" not in raw:
-        raise ValueError(f"instruments.{instrument_name}.port is required")
+    if "port" not in raw and "resource_name" not in raw:
+        raise ValueError(f"instruments.{instrument_name} requires either 'port' or 'resource_name'")
 
     role_to_quantity = {
         "gate_source": "Vg",
@@ -394,9 +475,12 @@ def _parse_e3631a_for_role(role_name: str, instrument_name: str, raw: dict[str, 
         current_limit_a=current_limit_a,
         instrument_name=instrument_name,
     )
+    resource_name = raw.get("resource_name")
+    port = str(raw.get("port") or (resource_name if resource_name else ""))
     return SerialDeviceConfig(
         name=f"{instrument_name}:{channel_text}",
-        port=str(raw["port"]),
+        port=port,
+        resource_name=str(resource_name) if resource_name is not None else None,
         baudrate=int(raw.get("baudrate", 9600)),
         timeout_s=float(raw.get("timeout_s", 1.0)),
         bytesize=8,
@@ -413,8 +497,8 @@ def _parse_e3631a_for_role(role_name: str, instrument_name: str, raw: dict[str, 
 
 
 def _parse_9132c_for_role(role_name: str, instrument_name: str, raw: dict[str, Any]) -> SerialDeviceConfig:
-    if "port" not in raw:
-        raise ValueError(f"instruments.{instrument_name}.port is required")
+    if "port" not in raw and "resource_name" not in raw:
+        raise ValueError(f"instruments.{instrument_name} requires either 'port' or 'resource_name'")
 
     role_to_quantity = {
         "gate_source": "Vg",
@@ -455,9 +539,12 @@ def _parse_9132c_for_role(role_name: str, instrument_name: str, raw: dict[str, A
         instrument_name=instrument_name,
     )
 
+    resource_name = raw.get("resource_name")
+    port = str(raw.get("port") or (resource_name if resource_name else ""))
     return SerialDeviceConfig(
         name=f"{instrument_name}:{channel_text}",
-        port=str(raw["port"]),
+        port=port,
+        resource_name=str(resource_name) if resource_name is not None else None,
         baudrate=int(raw.get("baudrate", 9600)),
         timeout_s=float(raw.get("timeout_s", 1.0)),
         bytesize=int(raw.get("bytesize", 8)),
