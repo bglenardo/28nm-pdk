@@ -1,0 +1,8 @@
+# Measurement output and large data (too big for GitHub)
+Plots/
+*.zip
+Simulation_at_300K.csv
+
+# Python
+__pycache__/
+*.pyc
