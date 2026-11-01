@@ -44,13 +44,31 @@ instruments:
     type: HP34401A
     port: COM8
     baudrate: 9600
-    timeout_s: 1.0
-    bytesize: 8
-    parity: "N"
-    stopbits: 1
+    # This 34401A's front-panel I/O menu is set to 7 data bits + EVEN parity +
+    # 2 stop bits (verified by scanning: only 9600 7E2 returns a clean
+    # "HEWLETT-PACKARD,34401A,...". 8N1 garbled every byte -> SCPI parse errors
+    # and the beep/stall we were chasing). Match the meter exactly.
+    timeout_s: 3.0
+    bytesize: 7
+    parity: "E"
+    stopbits: 2
     read_termination: "\n"
     write_termination: "\n"
-    measure_current_cmd: "MEAS:CURR:DC?"
+    init_commands:
+      # Over RS-232 the meter powers up in LOCAL; without SYST:REM a triggered
+      # READ? returns +550 "Command not allowed in local". Enter remote first.
+      - "SYST:REM"
+      - "*CLS"
+      # Silence the beeper so any benign SCPI error does not beep / stall runs.
+      - "SYST:BEEP:STAT OFF"
+      # "AUTO" is NOT a valid CONF:CURR:DC range parameter on the 34401A
+      # (valid: {<range>|MIN|MAX|DEF}); DEF selects autoranging.
+      - "CONF:CURR:DC DEF"
+      - "SENS:CURR:DC:NPLC 1"
+      - "TRIG:SOUR IMM"
+      - "TRIG:COUN 1"
+      - "SAMP:COUN 1"
+    measure_current_cmd: "READ?"
     current_meter: true
     sample_every_n_points: 10
 

@@ -503,6 +503,13 @@ def _open_current_meter(config: ProjectConfig) -> SerialInstrument | None:
 
     device = SerialInstrument(config.current_meter)
     device.open()
+    # Configure the meter ONCE here (e.g. CONF:CURR:DC, fixed NPLC, TRIG:SOUR IMM)
+    # so each per-point read is a fast READ?/FETCh? instead of a full MEAS? that
+    # reconfigures and autoranges every call. The latter overruns the serial
+    # timeout at 9600 baud and leaves the 34401A raising -410 "Query INTERRUPTED"
+    # (the audible beep) on the following read.
+    _clear_status(device)
+    _apply_init_commands(device)
     return device
 
 
@@ -521,6 +528,9 @@ def _read_supply_current(
     try:
         return _measure_current_a(device)
     except InstrumentError:
+        # Clear any lingering error/query state (e.g. a timed-out READ?) so the
+        # next sample starts clean instead of tripping -410 repeatedly.
+        _clear_status(device)
         return None
 
 
