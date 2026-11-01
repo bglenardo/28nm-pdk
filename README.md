@@ -13,6 +13,54 @@ The scan-chain device selector is driven by the Arduino firmware in
 > The authoritative reference for bit offsets, clock counts, and pin mapping is
 > [Arduino/SCAN_CHAIN_ARCHITECTURE.md](Arduino/SCAN_CHAIN_ARCHITECTURE.md).
 
+## How the scan chain selects a device
+
+Every on-chip transistor is selected by shifting a **one-hot bit pattern** into a
+serial scan chain, then latching it. If this is wrong, the drain still sources
+current but the **gate of the intended device is never connected**, so `Ids`
+responds only to `Vd` and *ignores `Vg`* — the classic symptom of a selection
+bug. Four things must all be right:
+
+1. **Two chips in series.** `SIN → chip 1 (344 bits) → 0 Ω resistor → chip 2
+   (344 bits) → SOUT (Arduino A1)`. The chips form one continuous **688-stage**
+   shift register. To address chip 1 clock **344** bits; to address chip 2 clock
+   **688** (push the pattern *through* chip 1). To verify, clock **1032**
+   (344×3) and read SOUT. `TOTAL_BITS = 344` per chip.
+
+2. **Address encoding (bit offsets).** Each flavor owns a 32-bit block starting
+   at `base = flavor_base[flavor]`. Within the block **the current/correct
+   convention has a +1 spacer bit**:
+
+   ```
+   row_bit = base + 1 + row     // rows occupy bits 1..6
+   col_bit = base + 7 + col     // columns start at bit 7
+   ```
+
+   An older convention (`base + row`, `base + 6 + col`, no spacer) exists in
+   historical sketches and is **one bit too low** — it selects the wrong cell.
+   The current convention comes from the latest LBL firmware on branch
+   `origin/wdh-current-flow`
+   (`WDH-setup/automated_arduino/automated_arduino.ino`).
+
+3. **Shift order = MSB-first.** Clock `scan_data` bit `TOTAL_BITS-1` first, down
+   to bit `0`. Clocking LSB-first bit-reverses the pattern and selects a mirror
+   cell.
+
+4. **`SUPDATE` is an edge-triggered latch.** It must be **pulsed** (HIGH→LOW) on
+   every latch. Driving it only LOW latches once and then never updates, so every
+   device yields identical curves.
+
+> ⚠️ **`VERIFY` passing does NOT prove correct device selection.** `VERIFY` only
+> checks shift-register *integrity* — it compares what was driven on `SIN`
+> against what came back on `SOUT` in the **same order**. A wrong bit offset,
+> reversed shift order, or un-pulsed latch all leave `VERIFY` reporting
+> `passed=1` while the wrong device (or none) is actually selected. The only
+> end-to-end proof is that `Ids` changes with `Vg`.
+
+Full details — pin map, clock-count table, the two offset conventions, the SOUT
+tap point, and which historical sketches are broken — are in
+[Arduino/SCAN_CHAIN_ARCHITECTURE.md](Arduino/SCAN_CHAIN_ARCHITECTURE.md).
+
 ## What the Python code does
 
 - Reads the instrument definitions from `instrument_list.yaml`
@@ -253,7 +301,7 @@ supersedes every older sketch in [Arduino/](Arduino/) and
 and must not be used).
 
 Flash it with the Arduino IDE (board: *Arduino Nano R4* / Renesas UNO R4 core),
-then confirm the serial port (COM14 on this bench) matches
+then confirm the serial port (COM11 on this bench) matches
 [instrument_list.yaml](instrument_list.yaml).
 
 ### Serial protocol (115200 baud, newline-terminated)

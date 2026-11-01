@@ -109,7 +109,7 @@ static int  raw_over = 0;
 
 
 // ============================================================
-// DEVICE ADDRESS MAP  (authoritative offsets: base+row, base+6+col)
+// DEVICE ADDRESS MAP  (authoritative offsets: base+1+row, base+7+col)
 // ============================================================
 
 const int FLAVOR_COUNT = 11;
@@ -178,10 +178,16 @@ bool setScanAddress(int flavor, int row, int col) {
 
   int base = flavor_base[flavor];
 
-  int row_bit = base + row;
+  // +1 SPACER bit per flavor block: bit 0 of each 32-bit block is an unused
+  // spacer; rows occupy bits 1..6, columns bits 7.. This matches the LATEST
+  // LBL firmware (wdh-current-flow: WDH-setup/automated_arduino/automated_arduino.ino),
+  // which uses `base + 1 + row` / `base + 7 + col`. The earlier no-spacer
+  // encoding (base+row / base+6+col) shifted the one-hot pattern one bit low,
+  // selecting the wrong on-chip cell (or none) -> Ids tracked Vd only, not Vg.
+  int row_bit = base + 1 + row;
   scan_data[row_bit / 8] |= (1 << (row_bit % 8));
 
-  int col_bit = base + 6 + col;
+  int col_bit = base + 7 + col;
   scan_data[col_bit / 8] |= (1 << (col_bit % 8));
   return true;
 }
@@ -211,7 +217,15 @@ void shiftChain(int total_clocks, bool capture_sout) {
   for (int cycle = 0; cycle < total_clocks; cycle++) {
     uint8_t sinBit = 0;
     if (cycle < TOTAL_BITS) {
-      sinBit = (scan_data[cycle >> 3] >> (cycle & 7)) & 1;
+      // MSB-first: present scan_data bit (TOTAL_BITS-1) first, down to bit 0.
+      // This matches the PROVEN LBL firmware (lbl_arduino_board_switching_code.ino
+      // and sketch_may26_r4), which clock `for (i = TOTAL_BITS-1; i >= 0; i--)`.
+      // The earlier LSB-first order (bit 0 first) bit-REVERSED the one-hot row/col
+      // pattern inside the shift register, so the latched address selected a mirror
+      // cell (or none) -- VERIFY still passed because it is order-agnostic, but the
+      // selected device's gate was never connected (Ids tracked Vd only, not Vg).
+      int bit_index = (TOTAL_BITS - 1) - cycle;
+      sinBit = (scan_data[bit_index >> 3] >> (bit_index & 7)) & 1;
       sin_log[cycle] = sinBit;
     }
 

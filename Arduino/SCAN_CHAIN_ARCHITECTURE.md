@@ -31,16 +31,11 @@ During a shift the scan pattern is driven into `SIN` only for the **first 344
 clocks**; after that `SIN` is held LOW so zeros trail the pattern and push it
 downstream.
 
-## Device address map (authoritative bit offsets)
+## Device address map (bit offsets) — IMPORTANT: two conventions exist
 
-`setScanAddress(flavor, row, col)` in the authoritative sketches uses:
-
-```
-row_bit = base + row
-col_bit = base + 6 + col
-```
-
-where `base = flavor_base[flavor]`:
+`setScanAddress(flavor, row, col)` writes **two one-hot bits** into `scan_data`
+(one for the row/width, one for the column/length+finger-count) inside a
+per-flavor 32-bit block. The block start is `base = flavor_base[flavor]`:
 
 | flavor | name       | base | cols |
 |--------|------------|------|------|
@@ -56,12 +51,56 @@ where `base = flavor_base[flavor]`:
 | 10     | pmos_hvt   | 280  | 25   |
 | 11     | pmos_lvt   | 312  | 25   |
 
+The `flavor_base` array above is identical in **every** sketch. What differs is
+the per-block bit offset, and there are **two conventions** in the repo history.
+Getting this wrong selects the wrong on-chip cell (or none) while leaving the
+chain electrically healthy — so `VERIFY` still passes but `Ids` stops responding
+to `Vg`.
+
+**CURRENT / CORRECT convention (use this)** — from the latest LBL firmware on
+branch `origin/wdh-current-flow`, file
+`WDH-setup/automated_arduino/automated_arduino.ino`:
+
+```
+row_bit = base + 1 + row     // +1 SPACER bit at bit 0 of each 32-bit block
+col_bit = base + 7 + col     // rows occupy bits 1..6, columns start at bit 7
+```
+
+**OLD convention (do NOT use — one bit too low)** — from the earlier
+`lbl_arduino_board_switching_code.ino` and `sketch_may26_r4*`:
+
+```
+row_bit = base + row
+col_bit = base + 6 + col
+```
+
 Valid ranges: `1 <= flavor <= 11`, `0 <= row < 6`, `0 <= col < flavor_cols(flavor)`.
 
-> NOTE: the known-broken `automated_arduino.ino` uses a different, inconsistent
-> offset convention (`base + 1 + row`, `base + 7 + col`). The table above
-> (`base + row`, `base + 6 + col`) is the convention used by every verification
-> sketch and should be treated as correct.
+> HISTORY: the `+1` spacer was initially dismissed (it first appeared in an
+> uncompiled draft, and the older verification sketches had no spacer). But the
+> **latest** LBL code — pushed to `wdh-current-flow` with the rest of the
+> up-to-date LBL setup — uses the spacer, so it is now treated as authoritative.
+> `Arduino/unified_scan_select/unified_scan_select.ino` was updated to match
+> (`base+1+row`, `base+7+col`). This fix is **hardware-confirmed (2026-11-01)**:
+> after reflashing, a `Vg` sweep at `Vd = 0.9 V` gave `Ids` = 11.1 µA / 251 µA /
+> 779 µA at `Vg` = 0.1 / 0.5 / 0.9 V (a ~70× swing), where the broken firmware
+> had given an identical ~9.5 µA at all three. `Ids` now responds to `Vg`.
+
+## Shift order — MSB-first (also critical)
+
+The one-hot pattern must be clocked out **MSB-first**: drive `scan_data` bit
+`TOTAL_BITS-1` first, down to bit `0`. The latest LBL firmware and all the
+verification sketches do this:
+
+```c
+for (int i = TOTAL_BITS - 1; i >= 0; i--) { /* drive scan_data bit i */ }
+```
+
+Clocking LSB-first (bit 0 first) **bit-reverses** the one-hot pattern inside the
+shift register and selects a mirror cell (or none). `VERIFY` cannot catch this:
+it compares what it drove on `SIN` against what it later read on `SOUT` **in the
+same order**, so a reversed order is still internally self-consistent and still
+reports `passed=1`. `unified_scan_select.ino` was corrected to clock MSB-first.
 
 ## Pin map (authoritative sketches)
 
@@ -115,8 +154,9 @@ All paths listed under `Arduino/`.
   them**.
 - Never reads SOUT (`soutLog` stays all-zero), so its `compareLogs` always
   reports set bits as `SIN=1 SOUT=0` — the "verification" is meaningless.
-- Uses the inconsistent bit offsets noted above.
-Treat it as deprecated.
+Treat it as deprecated. (Note: its `base+1+row` / `base+7+col` offsets are
+actually the *correct* convention — see the address-map section — but the
+344×4 shift strategy still makes it unusable for addressing chip 2.)
 
 ## RESOLVED: where is SOUT physically tapped?
 
