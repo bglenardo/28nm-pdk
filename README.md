@@ -85,6 +85,12 @@ python run_routine.py `
   - Scan-chain chip index (`1` or `2`) for the selected device. Chip 1 clocks
     344 bits; chip 2 clocks 688 bits (pushing the pattern through chip 1).
   - Default: `1`
+- `--no-verify-device`
+  - Skip the scan-chain `VERIFY` readback check. By default, when device
+    coordinates are given, the runner clocks the full chain and reads SOUT back
+    (requiring zero mismatches) **before** selecting the device, aborting the run
+    if the readback fails. The `VERIFY` is run first because it latches trailing
+    zeros; the real `SEL` then runs last so the requested device stays selected.
 - `--no-live-plot`
   - Disables the live matplotlib plot.
 - `--no-confirm-initial`
@@ -324,20 +330,14 @@ The Python code does not upload Arduino firmware for you.
 
 ## Known issues
 
-- **SOUT scan-chain readback is non-functional (OUTSTANDING, 2026-10-25).**
-  `VERIFY` / `SOUTRAW` show pin A1 floating at ~0.2–0.4 V (`sout_highs = 0`,
-  `shift_max ≈ 59` of 1023) with no correlation to the driven `SIN` pattern, so
-  the full-chain readback cannot be verified yet. Ruled out so far: the Arduino
-  command/clock protocol (device `SEL` acks `SEL_DONE` correctly), the readback
-  *software* (firmware and host verified), the SOUT tap point (confirmed A1 =
-  chip-2 SOUT), SOUT wiring continuity to A1, and the DUT 0.9 V / 1.8 V rails
-  (powering them changed nothing). The fault is upstream of SOUT — most likely a
-  grounding/signal-integrity issue or the chip-2 output not driving a readable
-  push-pull level. **Device *selection* itself is independent of this** and is
-  validated by the transistor measurement, not by SOUT readback. Next debug step:
-  scope the seven control/clock lines (SCLKP, SCLKN, SIN, SRST, SUPDATE, SENABLE,
-  SOUT) at the chip pins during a `VERIFY` to confirm they toggle and that SOUT
-  is a clean CMOS level.
+- **SOUT scan-chain readback — RESOLVED (2026-11-01).** Previously pin A1 read a
+  flat, floating ~0.2–0.4 V (`sout_highs = 0`) with no correlation to the driven
+  `SIN` pattern. Root cause: a faulty Arduino selector board (bad level
+  shifters). After replacing the board, `VERIFY` across multiple device
+  addresses reports `sout_highs = 2`, `best_mismatch = 0`, `best_offset ≈ 687`,
+  `tap = chip2`, `passed = 1` — i.e. the full 688-stage series chain reads back
+  cleanly with zero mismatches, confirming A1 is tapped at chip 2's SOUT.
+
 
 
 

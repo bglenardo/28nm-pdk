@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Test the Arduino device-selector serial link.")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="YAML config to read the Arduino port from.")
     parser.add_argument("--port", default=None, help="Serial port override (e.g. COM14). Defaults to the YAML Arduino port.")
-    parser.add_argument("--baudrate", type=int, default=None, help="Baud rate override. Defaults to the YAML value or 9600.")
+    parser.add_argument("--baudrate", type=int, default=None, help="Baud rate override. Defaults to the YAML value or 115200.")
     parser.add_argument("--flavor", type=int, default=1, help="Flavor index for the default SEL command (default: 1).")
     parser.add_argument("--row", type=int, default=1, help="Row index for the default SEL command (default: 1).")
     parser.add_argument("--col", type=int, default=6, help="Column index for the default SEL command (default: 6).")

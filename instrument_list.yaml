@@ -57,7 +57,7 @@ instruments:
   arduino_device_switch:
     type: Arduino
     model: NANO_R4
-    port: COM14
+    port: COM11
     # Unified sketch (Arduino/unified_scan_select) runs at 115200 baud.
     baudrate: 115200
     timeout_s: 1.0

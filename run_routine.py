@@ -184,6 +184,49 @@ class ArduinoDeviceSelector:
             raise RuntimeError(f"Arduino did not confirm device selection (expected SEL_DONE), got: {ack!r}")
         return ack
 
+    def verify_device(self, flavor_idx: int, row_idx: int, col_idx: int) -> dict[str, str]:
+        """Clock the full scan chain and read SOUT back to confirm the selection.
+
+        Sends ``VERIFY,<flavor>,<row>,<col>`` and parses the report line that the
+        unified sketch returns before ``VERIFY_DONE``. Returns the parsed
+        key=value fields (e.g. ``passed``, ``best_mismatch``, ``tap``). Raises if
+        the board never replies.
+        """
+        if self._serial is None:
+            self.open()
+
+        self._serial.reset_input_buffer()
+        command = f"VERIFY,{flavor_idx},{row_idx},{col_idx}\n"
+        self._serial.write(command.encode("ascii"))
+        self._serial.flush()
+
+        # The full 1032-clock readback takes longer than a plain SEL; give it room.
+        deadline = time.time() + max(self.ack_timeout_s, 6.0)
+        buffer = b""
+        while time.time() < deadline:
+            if self._serial.in_waiting > 0:
+                buffer += self._serial.read(self._serial.in_waiting)
+                if b"VERIFY_DONE" in buffer or b"ERR" in buffer:
+                    break
+            else:
+                time.sleep(0.01)
+
+        text = buffer.decode(errors="ignore").strip()
+        report_line = ""
+        for line in text.splitlines():
+            if line.strip().startswith("VERIFY "):
+                report_line = line.strip()
+                break
+        if not report_line:
+            raise RuntimeError(f"Arduino did not return a VERIFY report, got: {text!r}")
+
+        fields: dict[str, str] = {}
+        for token in report_line.split():
+            if "=" in token:
+                key, value = token.split("=", 1)
+                fields[key] = value
+        return fields
+
 
 def _load_arduino_switcher(config_path: str | Path) -> ArduinoDeviceSelector | None:
     """Read the optional Arduino device-selection instrument from the YAML config."""
@@ -344,6 +387,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Arduino scan-chain chip index (1 or 2) used when selecting a device (default: 1).",
     )
     parser.add_argument(
+        "--no-verify-device",
+        action="store_true",
+        help="Skip the post-selection scan-chain VERIFY readback check (by default the "
+             "selection is confirmed by clocking SOUT back and requiring zero mismatches).",
+    )
+    parser.add_argument(
         "--no-live-plot",
         action="store_true",
         help="Disable the live matplotlib plot during acquisition.",
@@ -412,6 +461,26 @@ def main() -> None:
     
     try:
         if arduino_switcher is not None and any(v is not None for v in (args.device_flavor, args.device_row, args.device_col)):
+            # VERIFY must run BEFORE the final SEL: a VERIFY clocks the full 1032-bit
+            # chain (pattern then trailing zeros) and latches at the end, which would
+            # latch all-zeros and DESELECT the device. Doing the integrity check first
+            # and the real SEL last leaves the requested device latched for the sweep.
+            if not args.no_verify_device:
+                report = arduino_switcher.verify_device(args.device_flavor, args.device_row, args.device_col)
+                passed = report.get("passed") == "1"
+                print(
+                    f"Scan-chain VERIFY: passed={report.get('passed', '?')} "
+                    f"mismatch={report.get('best_mismatch', '?')} "
+                    f"sout_highs={report.get('sout_highs', '?')} "
+                    f"raw_max={report.get('raw_max', '?')}"
+                )
+                if not passed:
+                    raise RuntimeError(
+                        "Scan-chain VERIFY failed (readback did not match the driven pattern). "
+                        f"Report: {report}. Check the Arduino selector board/wiring, or pass "
+                        "--no-verify-device to bypass this check."
+                    )
+
             ack = arduino_switcher.select_device(args.device_flavor, args.device_row, args.device_col, args.device_chip)
             print(f"Arduino selector {arduino_switcher.model} on {arduino_switcher.port}: ack={ack!r}")
 
