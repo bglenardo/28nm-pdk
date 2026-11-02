@@ -53,7 +53,8 @@ def run_device_array_scan(
     routine_indices: list[int],
     ids_settle_s: float,
     verify_enabled: bool,
-) -> list[RoutineMeasurement]:
+    checkpoint_path: str | Path | None = None,
+) -> tuple[list[RoutineMeasurement], bool]:
     """Iterate a device array (Flavor x Row x Col), running routines on each.
 
     For every device: VERIFY+SEL on the scan chain, run each requested routine
@@ -61,6 +62,13 @@ def run_device_array_scan(
     pool), tag the points with the device coordinates, and accumulate them. No
     confirmation pause is used so the scan runs unattended. The caller writes the
     aggregated list to a single CSV.
+
+    The scan can be interrupted gracefully: pressing Ctrl+C (``KeyboardInterrupt``)
+    stops the loop after the current device and returns all points collected so
+    far instead of discarding them. When ``checkpoint_path`` is given, the
+    accumulated points are also flushed to that CSV after every device, so a hard
+    crash or power loss still preserves everything up to the last completed
+    device.
     """
     devices = [(f, r, c) for f in flavors for r in rows for c in cols]
     total = len(devices) * len(routine_indices)
@@ -71,28 +79,42 @@ def run_device_array_scan(
         f"Device-array scan: {len(devices)} device(s) x {len(routine_indices)} "
         f"routine(s) = {total} acquisition(s)."
     )
+    print("Press Ctrl+C at any time to stop gracefully; data collected so far is kept.")
 
-    for flavor, row, col in devices:
-        print(f"\n=== Device flavor={flavor} row={row} col={col} chip={chip} ===")
-        select_device_on_arduino(arduino_switcher, flavor, row, col, chip, verify_enabled)
+    interrupted = False
+    try:
+        for flavor, row, col in devices:
+            print(f"\n=== Device flavor={flavor} row={row} col={col} chip={chip} ===")
+            select_device_on_arduino(arduino_switcher, flavor, row, col, chip, verify_enabled)
 
-        for routine_index in routine_indices:
-            done += 1
-            print(f"[{done}/{total}] Running routine index {routine_index} ...")
-            _routine, points = run_single_routine_from_csv(
-                config=config,
-                routines_csv=routines_csv,
-                routine_index=routine_index,
-                point_callback=None,
-                confirm_initial_bias=False,
-                ids_settle_s=ids_settle_s,
-            )
-            tagged = tag_measurements_with_device(
-                points, flavor=flavor, row=row, col=col, chip=chip
-            )
-            all_points.extend(tagged)
+            for routine_index in routine_indices:
+                done += 1
+                print(f"[{done}/{total}] Running routine index {routine_index} ...")
+                _routine, points = run_single_routine_from_csv(
+                    config=config,
+                    routines_csv=routines_csv,
+                    routine_index=routine_index,
+                    point_callback=None,
+                    confirm_initial_bias=False,
+                    ids_settle_s=ids_settle_s,
+                )
+                tagged = tag_measurements_with_device(
+                    points, flavor=flavor, row=row, col=col, chip=chip
+                )
+                all_points.extend(tagged)
 
-    return all_points
+            # Checkpoint after each completed device so an abrupt termination
+            # still leaves a valid, up-to-date CSV on disk.
+            if checkpoint_path is not None:
+                write_routine_measurements_lbl_csv(checkpoint_path, all_points)
+    except KeyboardInterrupt:
+        interrupted = True
+        print(
+            f"\n[interrupted] Ctrl+C received after {done}/{total} acquisition(s). "
+            "Stopping scan and keeping all data collected so far."
+        )
+
+    return all_points, interrupted
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -170,9 +192,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ids-settle-s",
         type=float,
-        default=1.0,
-        help="Settling time in seconds before each Ids measurement (default: 1.0). "
-             "Lower this to speed up the scan at the cost of settling accuracy.",
+        default=0.05,
+        help="Settling time in seconds before each Ids measurement (default: 0.05). "
+             "Raise this to trade speed for extra settling accuracy.",
     )
     return parser
 
@@ -230,7 +252,7 @@ def main() -> None:
 
     start_time = time.time()
     try:
-        points = run_device_array_scan(
+        points, interrupted = run_device_array_scan(
             config=config,
             routines_csv=args.routines_csv,
             arduino_switcher=arduino_switcher,
@@ -241,6 +263,7 @@ def main() -> None:
             routine_indices=routine_indices,
             ids_settle_s=args.ids_settle_s,
             verify_enabled=not args.no_verify_device,
+            checkpoint_path=output_csv,
         )
         write_routine_measurements_lbl_csv(output_csv, points)
     finally:
@@ -253,11 +276,17 @@ def main() -> None:
                 supply.close()
 
     elapsed_s = time.time() - start_time
+    status = "interrupted" if interrupted else "complete"
     print(
-        f"\nDevice-array scan complete: {len(flavors) * len(rows) * len(cols)} device(s), "
-        f"{len(routine_indices)} routine(s), {len(points)} total points in {elapsed_s:.1f} s."
+        f"\nDevice-array scan {status}: {len(points)} total points collected in "
+        f"{elapsed_s:.1f} s."
     )
     print(f"Saved: {output_csv}")
+
+    if interrupted:
+        # Non-zero exit (SIGINT convention) so a chained command sequence stops
+        # instead of starting the next scan.
+        sys.exit(130)
 
 
 if __name__ == "__main__":

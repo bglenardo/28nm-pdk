@@ -6,7 +6,7 @@ instruments:
 
   keithley_e3631a_a:
     type: E3631A
-    resource_name: "GPIB1::5::INSTR"
+    resource_name: "GPIB0::5::INSTR"
     channel_map:
       P6V: Vb
       P25V: Vg
@@ -40,12 +40,13 @@ instruments:
       CH2: vgxp
       CH3: None
 
-  hp34401a_1v8:
+  hp34401a_0v9:
     type: HP34401A
     port: COM8
     baudrate: 9600
-    # This 34401A's front-panel I/O menu is set to 7 data bits + EVEN parity +
-    # 2 stop bits (verified by scanning: only 9600 7E2 returns a clean
+    # This 34401A monitors the current through the 0.9 V supply rail (in series
+    # on the 0.9 V line). Its front-panel I/O menu is set to 7 data bits + EVEN
+    # parity + 2 stop bits (verified by scanning: only 9600 7E2 returns a clean
     # "HEWLETT-PACKARD,34401A,...". 8N1 garbled every byte -> SCPI parse errors
     # and the beep/stall we were chasing). Match the meter exactly.
     timeout_s: 3.0

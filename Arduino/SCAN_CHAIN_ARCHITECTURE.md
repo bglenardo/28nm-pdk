@@ -57,34 +57,44 @@ Getting this wrong selects the wrong on-chip cell (or none) while leaving the
 chain electrically healthy — so `VERIFY` still passes but `Ids` stops responding
 to `Vg`.
 
-**CURRENT / CORRECT convention (use this)** — from the latest LBL firmware on
-branch `origin/wdh-current-flow`, file
-`WDH-setup/automated_arduino/automated_arduino.ino`:
+**CURRENT / CORRECT convention (use this)** — the no-spacer encoding, from the
+earlier `lbl_arduino_board_switching_code.ino` / `sketch_may26_r4*` and restored
+in `Arduino/unified_scan_select/unified_scan_select.ino` on 2026-11-02:
 
 ```
-row_bit = base + 1 + row     // +1 SPACER bit at bit 0 of each 32-bit block
-col_bit = base + 7 + col     // rows occupy bits 1..6, columns start at bit 7
+row_bit = base + row         // rows occupy bits 0..5 of each 32-bit block
+col_bit = base + 6 + col     // columns start at bit 6
 ```
 
-**OLD convention (do NOT use — one bit too low)** — from the earlier
-`lbl_arduino_board_switching_code.ino` and `sketch_may26_r4*`:
+**OLD convention (do NOT use — one bit too HIGH)** — the `+1` "spacer" encoding
+from `WDH-setup/automated_arduino/automated_arduino.ino`:
 
 ```
-row_bit = base + row
-col_bit = base + 6 + col
+row_bit = base + 1 + row     // +1 spacer; shifts every one-hot bit one too high
+col_bit = base + 7 + col
 ```
 
 Valid ranges: `1 <= flavor <= 11`, `0 <= row < 6`, `0 <= col < flavor_cols(flavor)`.
 
-> HISTORY: the `+1` spacer was initially dismissed (it first appeared in an
-> uncompiled draft, and the older verification sketches had no spacer). But the
-> **latest** LBL code — pushed to `wdh-current-flow` with the rest of the
-> up-to-date LBL setup — uses the spacer, so it is now treated as authoritative.
-> `Arduino/unified_scan_select/unified_scan_select.ino` was updated to match
-> (`base+1+row`, `base+7+col`). This fix is **hardware-confirmed (2026-11-01)**:
-> after reflashing, a `Vg` sweep at `Vd = 0.9 V` gave `Ids` = 11.1 µA / 251 µA /
-> 779 µA at `Vg` = 0.1 / 0.5 / 0.9 V (a ~70× swing), where the broken firmware
-> had given an identical ~9.5 µA at all three. `Ids` now responds to `Vg`.
+> HISTORY: the `+1` spacer appeared in the latest LBL firmware on
+> `wdh-current-flow` and was briefly treated as authoritative. A `Vg` sweep on a
+> **low-index** device (2026-11-01) seemed to confirm it — `Ids` = 11.1 / 251 /
+> 779 µA at `Vg` = 0.1 / 0.5 / 0.9 V — but that only proved the bit landed on
+> *some* real transistor, not the labelled one.
+>
+> CORRECTED 2026-11-02: a full 834-device scan compared against the
+> flavor-keyed simulation (`data/Simulation_at_300K.csv`) showed the `+1`
+> encoding was off by one **too high**. The TOP index of each field was dead
+> across *every* flavor — label `row 5` lit `base+6` = physical row 6 (nonexistent),
+> label `col 24` (NA: `col 13`) ran off the end of the column field — i.e. every
+> label N selected physical cell N+1 and physical row 0 / col 0 were unreachable.
+> Flavors were verified *correctly* aligned by the same comparison (native
+> `NMOS_NA` has the lowest Vt in both measured and sim, at flavor index 3 in
+> both; full Vt rank order matches, Spearman rho = 0.94). Dropping the `+1`
+> (back to `base+row` / `base+6+col`) restores label N -> physical cell N.
+> Re-verify on hardware with a top-index device (`row 5`, and the top column)
+> after reflashing.
+
 
 ## Shift order — MSB-first (also critical)
 

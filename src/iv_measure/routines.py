@@ -57,6 +57,10 @@ class RoutineMeasurement:
     vgxn_v: float
     drain_i_a: float
     supply_i_a: float | None = None
+    # Current through the 1.8 V supply rail. Reserved for a future second
+    # ammeter that reads both supply rails simultaneously; left as None (blank in
+    # the CSV) until that hardware exists.
+    supply_i_1v8_a: float | None = None
     # Wall-clock timestamp (time.time()) when the point was measured; written to
     # the LBL-format CSV ``time_s`` column.
     time_s: float | None = None
@@ -390,14 +394,18 @@ def write_routine_measurements_csv(path: str | Path, points: list[RoutineMeasure
 def write_routine_measurements_lbl_csv(path: str | Path, points: list[RoutineMeasurement]) -> None:
     """Write measurements in the LBL column layout.
 
-    Columns match the LBL reference data exactly:
+    Columns follow the LBL reference layout, except the supply-current column is
+    renamed for clarity:
     ``flavor, Row_idx, Col_idx, Flavor_name, w, l, nf, vg, vd, Vds_meas_V, id,
-    id_2, time_s``. The ``flavor`` column is 0-based (LBL convention), while the
-    stored ``device_flavor`` is the 1-based value sent to the Arduino.
+    Isupply_0V9, Isupply_1V8, time_s``. The ``flavor`` column is 0-based (LBL
+    convention), while the stored ``device_flavor`` is the 1-based value sent to
+    the Arduino.
 
-    The current data is kept RAW: ``id`` is the raw drain current and ``id_2`` is
-    the raw supply current (empty when not sampled on that point). Any baseline
-    subtraction is a display-only concern and is never applied here.
+    The current data is kept RAW: ``id`` is the raw drain current,
+    ``Isupply_0V9`` is the raw 0.9 V rail supply current from the HP 34401A, and
+    ``Isupply_1V8`` is reserved for a future second ammeter on the 1.8 V rail
+    (both empty when not sampled on that point). Any baseline subtraction is a
+    display-only concern and is never applied here.
     """
     from iv_measure.device_geometry import lookup_geometry
 
@@ -419,7 +427,8 @@ def write_routine_measurements_lbl_csv(path: str | Path, points: list[RoutineMea
                 "vd",
                 "Vds_meas_V",
                 "id",
-                "id_2",
+                "Isupply_0V9",
+                "Isupply_1V8",
                 "time_s",
             ]
         )
@@ -439,6 +448,7 @@ def write_routine_measurements_lbl_csv(path: str | Path, points: list[RoutineMea
                     p.vd_v,  # Vds_meas_V: no separate readback; use the setpoint.
                     p.drain_i_a,
                     p.supply_i_a if p.supply_i_a is not None else "",
+                    p.supply_i_1v8_a if p.supply_i_1v8_a is not None else "",
                     p.time_s if p.time_s is not None else "",
                 ]
             )

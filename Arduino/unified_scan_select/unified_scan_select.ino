@@ -109,7 +109,7 @@ static int  raw_over = 0;
 
 
 // ============================================================
-// DEVICE ADDRESS MAP  (authoritative offsets: base+1+row, base+7+col)
+// DEVICE ADDRESS MAP  (authoritative offsets: base+row, base+6+col)
 // ============================================================
 
 const int FLAVOR_COUNT = 11;
@@ -178,16 +178,24 @@ bool setScanAddress(int flavor, int row, int col) {
 
   int base = flavor_base[flavor];
 
-  // +1 SPACER bit per flavor block: bit 0 of each 32-bit block is an unused
-  // spacer; rows occupy bits 1..6, columns bits 7.. This matches the LATEST
-  // LBL firmware (wdh-current-flow: WDH-setup/automated_arduino/automated_arduino.ino),
-  // which uses `base + 1 + row` / `base + 7 + col`. The earlier no-spacer
-  // encoding (base+row / base+6+col) shifted the one-hot pattern one bit low,
-  // selecting the wrong on-chip cell (or none) -> Ids tracked Vd only, not Vg.
-  int row_bit = base + 1 + row;
+  // NO-SPACER encoding: rows occupy bits 0..5, columns bits 6.. of each flavor
+  // block (`base + row` / `base + 6 + col`).
+  //
+  // CORRECTION (2026-11-02): the previous `base + 1 + row` / `base + 7 + col`
+  // (one-hot +1 "spacer") was off by one HIGH. A full 834-device scan compared
+  // against the flavor-keyed simulation (data/Simulation_at_300K.csv) showed the
+  // TOP index of each field was systematically dead across EVERY flavor: label
+  // `row 5` lit bit base+6 = physical row 6 (does not exist) and label `col 24`
+  // (NA: `col 13`) lit the top column bit past the array. Equivalently every
+  // label N selected physical cell N+1, so physical row 0 / col 0 were never
+  // reachable. Rows 0-4 / cols 0-23 still responded to Vg only because they
+  // landed on an adjacent real transistor, which is why the earlier low-index
+  // "hardware-confirmed" check missed it. Dropping the +1 restores label N ->
+  // physical cell N and makes all 6 rows / full column set addressable.
+  int row_bit = base + row;
   scan_data[row_bit / 8] |= (1 << (row_bit % 8));
 
-  int col_bit = base + 7 + col;
+  int col_bit = base + 6 + col;
   scan_data[col_bit / 8] |= (1 << (col_bit % 8));
   return true;
 }
