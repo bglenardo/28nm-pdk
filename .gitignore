@@ -3,6 +3,9 @@ __pycache__/
 .venv/
 data/*.csv
 
+# Generated plots -- keep images out of the repo going forward.
+*.png
+
 # Raw reference measurement data -- never commit (keep off GitHub).
 **/Will reference data*/
 
