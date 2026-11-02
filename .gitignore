@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 data/*.csv
+
+# Raw reference measurement data -- never commit (keep off GitHub).
+**/Will reference data*/
+

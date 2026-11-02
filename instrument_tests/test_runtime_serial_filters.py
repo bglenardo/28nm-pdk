@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from iv_measure.config import SerialDeviceConfig
 from iv_measure.serial_instrument import VisaInstrument
-from run_routine import _is_serial_port_name, _serial_port_names
+from iv_measure.bench import _is_serial_port_name, _serial_port_names
 
 
 def test_is_serial_port_name_filters_visa_resources() -> None:

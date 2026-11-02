@@ -4,9 +4,11 @@ This project provides a Python interface for transistor I-V measurements on the
 SLAC cryo 28 nm PDK bench, plus the Arduino scan-chain firmware used to select
 which on-chip device is under test.
 
-The main entry point for a single measurement routine is `run_routine.py`.
-The scan-chain device selector is driven by the Arduino firmware in
-[Arduino/unified_scan_select/](Arduino/unified_scan_select/).
+There are two entry points: `run_routine_test.py` for an interactive
+single-device run (confirmation pause + live plot), and
+`run_routine_automated_scan.py` for a fast, unattended multi-device scan (no
+pause, no live plot). The scan-chain device selector is driven by the Arduino
+firmware in [Arduino/unified_scan_select/](Arduino/unified_scan_select/).
 
 > **Scan-chain architecture:** the board carries **two ASIC chips daisy-chained
 > in series** (`SIN → chip 1 (344 bits) → 0 Ω → chip 2 (344 bits) → SOUT/A1`).
@@ -88,27 +90,46 @@ pip install -e .
 
 3. Edit `instrument_list.yaml` so the ports and SCPI commands match your hardware.
 
-4. Run a single routine with `run_routine.py`.
+4. Run a single routine with `run_routine_test.py`, or an automated multi-device
+   scan with `run_routine_automated_scan.py`.
 
-## Running `run_routine.py`
+## Running `run_routine_test.py` (interactive, single device)
 
-The script accepts a routine index and several optional settings.
+The script accepts a routine index and several optional settings. It pauses for
+confirmation after the initial voltages are applied and shows a live plot.
 By default it uses a simpler two-wire drain measurement. Pass `--four-wire` to enable remote sense.
 
 ### Basic usage
 
 ```powershell
-python run_routine.py --routine-index 0
+python run_routine_test.py --routine-index 0
 ```
 
 ### Copy/paste example
 
 ```powershell
-python run_routine.py `
+python run_routine_test.py `
   --config instrument_list.yaml `
   --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" `
   --output-csv data/first_routine_measurements.csv `
   --routine-index 0 `
+  --ids-settle-s 1.0
+```
+
+## Running `run_routine_automated_scan.py` (fast, multi-device)
+
+This script iterates a Flavor x Row x Col device array as quickly as possible:
+no confirmation pause and no live plot. Device axes accept comma/range lists
+(e.g. `1`, `1,2`, `1-3`). All measured points are written to one aggregated CSV
+tagged with the device coordinates.
+
+```powershell
+python run_routine_automated_scan.py `
+  --config instrument_list.yaml `
+  --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" `
+  --output-csv data/array_scan_measurements.csv `
+  --device-flavors 1 --device-rows 1-2 --device-cols 4 `
+  --routine-indices 0 `
   --ids-settle-s 1.0
 ```
 
@@ -132,6 +153,12 @@ python run_routine.py `
 - `--device-chip`
   - Scan-chain chip index (`1` or `2`) for the selected device. Chip 1 clocks
     344 bits; chip 2 clocks 688 bits (pushing the pattern through chip 1).
+  - Default: `1`
+- `--board`
+  - Board number recorded in the auto-generated output filename. When
+    `--output-csv` is omitted, the scan is saved to
+    `data/array_scan_board<board>_chip<chip>.csv` so each chip/board run lands in
+    its own file.
   - Default: `1`
 - `--no-verify-device`
   - Skip the scan-chain `VERIFY` readback check. By default, when device
@@ -244,12 +271,13 @@ instruments:
     device_select_cmd: "SEL,{flavor_idx},{row_idx},{col_idx},{chip_idx}\n"
 ```
 
-This selector is used by the routine runner when you pass the optional device
-coordinates (note the `--device-chip` flag, which chooses chip 1 or chip 2 on
-the series scan chain):
+This selector is used by both runners. In `run_routine_test.py` you pass a
+single device's coordinates (note the `--device-chip` flag, which chooses chip 1
+or chip 2 on the series scan chain); in `run_routine_automated_scan.py` you pass
+comma/range lists to scan many devices:
 
 ```powershell
-python run_routine.py `
+python run_routine_test.py `
   --config instrument_list.yaml `
   --routines-csv "Routines/Cryo PDK DC measurement routines - nMOS 28nm.csv" `
   --output-csv data/first_routine_measurements.csv `
@@ -288,6 +316,58 @@ The script reads these columns:
 - `vgxn Init`
 
 The `--routine-index` argument selects which row to run.
+
+## Comparing scans to LBL reference data
+
+[compare_to_lbl.py](compare_to_lbl.py) overlays one or two of our measured scans
+against the LBL 300 K reference data, laid out as a device grid (one plot row per
+scan-chain `Row_idx`, one column per `Col_idx`). It is a visualization-only
+tool — it never modifies the measured CSVs.
+
+Styling:
+
+- **First measured dataset** (`--measured`): solid lines, triangle markers.
+- **Second measured dataset** (`--measured2`, optional — e.g. a second chip):
+  solid lines, square markers.
+- **LBL reference** (`--reference`): dashed lines, no markers.
+- Traces are colored by `Vg`, so the same gate voltage shares a color across all
+  three sources.
+
+Each panel title shows the flavor/row/col and a second line with the device
+geometry (`L`, `W`, `nf`). The y-axis is shared per plot row and clipped to a
+fixed display window; points that fall outside the window (such as a stray
+single-point measurement spike) are dropped **for display only** so the line
+connects cleanly — the underlying CSV data is left raw.
+
+```powershell
+# Single chip vs LBL
+python compare_to_lbl.py `
+  --measured data/array_scan_board1_chip1.csv `
+  --reference "LBL_setup/Will reference data 300K/20260818_194845.csv" `
+  --board 1 --chip 1 `
+  --out data/compare_to_lbl_300K_board1_chip1.png
+
+# Two chips + LBL on one figure
+python compare_to_lbl.py `
+  --measured  data/array_scan_board1_chip1.csv `
+  --measured2 data/array_scan_board1_chip2.csv `
+  --reference "LBL_setup/Will reference data 300K/20260818_194845.csv" `
+  --board 1 --chip 1 --chip2 2 `
+  --out data/compare_to_lbl_300K_board1_chip1_chip2.png
+```
+
+### Arguments
+
+- `--measured` — first measured LBL-format scan CSV.
+- `--measured2` — optional second measured scan CSV (overlaid with square
+  markers).
+- `--reference` — LBL reference CSV (300 K).
+- `--out` — output PNG path for the figure.
+- `--board` — board number shown in the title.
+- `--chip` / `--chip2` — chip numbers for the first and second measured datasets.
+
+> The `LBL_setup/Will reference data*/` directories are **git-ignored** and must
+> never be committed (see [.gitignore](.gitignore)).
 
 ## Arduino firmware & bench tests
 
@@ -372,7 +452,8 @@ How to read the `VERIFY` result:
 2. Run `python test_arduino_connection.py` — expect `RESULT: OK`.
 3. Run `python test_arduino_connection.py --verify --flavor 1 --row 1 --col 6` to
    confirm the scan chain reads back.
-4. Then run `run_routine.py` to perform measurements.
+4. Then run `run_routine_test.py` (single device) or
+   `run_routine_automated_scan.py` (multi-device scan) to perform measurements.
 
 The Python code does not upload Arduino firmware for you.
 

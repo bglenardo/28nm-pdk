@@ -214,7 +214,8 @@ against the driven pattern under **two** alignment hypotheses:
 Whichever count is ~0 reveals the real tap point empirically (no schematic
 needed). The host sees both numbers and the firmware's `best=` pick.
 
-The Python host (`run_routine.py` `ArduinoDeviceSelector`), the YAML
+The Python host (`iv_measure.bench.ArduinoDeviceSelector`, used by both
+`run_routine_test.py` and `run_routine_automated_scan.py`), the YAML
 (`instrument_list.yaml`, 115200 baud, 4-field command) and
 `test_arduino_connection.py` (`--verify`, `--chip`) all target this sketch.
 

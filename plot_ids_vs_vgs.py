@@ -20,8 +20,8 @@ def main() -> None:
     with DATA_PATH.open("r", newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            vgs_values.append(float(row["vg_v"]))
-            ids_values.append(float(row["drain_i_a"]))
+            vgs_values.append(float(row["vg"]))
+            ids_values.append(float(row["id"]))
 
     if not vgs_values:
         raise ValueError("No rows found in CSV; cannot plot Ids vs Vgs.")

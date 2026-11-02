@@ -13,6 +13,11 @@ from iv_measure.serial_instrument import InstrumentError, SerialInstrument
 
 
 VALID_TERMINALS = {"Vs", "Vd", "Vg", "Vb", "vgxp", "vgxn"}
+# Quantities that the operator controls MANUALLY on the bench (e.g. the BK 9132C
+# vgxp/vgxn rails). Software must never open, drive, ramp, or disable the
+# instruments backing these quantities. Their nominal setpoints from the routine
+# CSV are still recorded for reference, but no SCPI is ever sent to set them.
+MANUAL_QUANTITIES = {"vgxp", "vgxn"}
 _DEBUG_SET_CMDS_MAX = int(os.getenv("IV_DEBUG_SET_CMDS", "0"))
 _DEBUG_SET_CMDS_COUNT = 0
 _DEBUG_BK_READBACK = os.getenv("IV_DEBUG_BK_READBACK", "0") == "1"
@@ -52,6 +57,44 @@ class RoutineMeasurement:
     vgxn_v: float
     drain_i_a: float
     supply_i_a: float | None = None
+    # Wall-clock timestamp (time.time()) when the point was measured; written to
+    # the LBL-format CSV ``time_s`` column.
+    time_s: float | None = None
+    # Scan-chain device coordinates (populated during a device-array scan; left
+    # as None for a plain single-device run so that output stays backward
+    # compatible).
+    device_flavor: int | None = None
+    device_row: int | None = None
+    device_col: int | None = None
+    device_chip: int | None = None
+
+
+def tag_measurements_with_device(
+    measurements: list[RoutineMeasurement],
+    *,
+    flavor: int | None,
+    row: int | None,
+    col: int | None,
+    chip: int | None,
+) -> list[RoutineMeasurement]:
+    """Return copies of ``measurements`` annotated with device coordinates.
+
+    Used by the device-array scan to label each point with the physical
+    Flavor/Row/Column/Chip that was selected on the scan chain when it was taken.
+    """
+    from dataclasses import replace
+
+    return [
+        replace(
+            m,
+            device_flavor=flavor,
+            device_row=row,
+            device_col=col,
+            device_chip=chip,
+        )
+        for m in measurements
+    ]
+
 
 
 PointCallback = Callable[[RoutineMeasurement], None]
@@ -156,6 +199,7 @@ def run_routines_from_csv(
                         vgxn_v=biases["vgxn"],
                         drain_i_a=drain_i,
                         supply_i_a=supply_i,
+                        time_s=time.time(),
                     )
                     results.append(measurement)
                     if point_callback is not None:
@@ -205,32 +249,11 @@ def run_single_routine_from_csv(
             "vgxp": selected_routine.vgxp_init,
             "vgxn": selected_routine.vgxn_init,
         }
-        non_vgx_biases = {
-            quantity: value
-            for quantity, value in init_biases.items()
-            if quantity not in {"vgxp", "vgxn"}
-        }
-        vgx_biases = {
-            quantity: value
-            for quantity, value in init_biases.items()
-            if quantity in {"vgxp", "vgxn"}
-        }
-
-        _apply_changed_biases(controls, non_vgx_biases, current_biases)
-        time.sleep(config.sweep.settle_s)
-
-        # Force vgxp/vgxn channels on at 0 V before ramping to their targets.
-        vgx_zero_biases = {quantity: 0.0 for quantity in vgx_biases}
-        _apply_changed_biases(controls, vgx_zero_biases, current_biases)
-        time.sleep(config.sweep.settle_s)
-
-        _ramp_biases(
-            controls=controls,
-            target_biases=vgx_biases,
-            duration_s=10.0,
-            steps=40,
-            current_biases=current_biases,
-        )
+        # vgxp/vgxn are MANUAL rails: the operator sets them on the BK 9132C
+        # front panel. Software never opens, drives, ramps, or disables them, so
+        # they are absent from `controls` and are skipped here automatically.
+        # Only the actively swept/stepped terminals (Vg/Vd/Vb/Vs) are applied.
+        _apply_changed_biases(controls, init_biases, current_biases)
         time.sleep(config.sweep.settle_s)
 
         if confirm_initial_bias:
@@ -277,6 +300,7 @@ def run_single_routine_from_csv(
                     vgxn_v=biases["vgxn"],
                     drain_i_a=drain_i,
                     supply_i_a=supply_i,
+                    time_s=time.time(),
                 )
                 results.append(measurement)
                 if point_callback is not None:
@@ -333,6 +357,10 @@ def write_routine_measurements_csv(path: str | Path, points: list[RoutineMeasure
                 "vgxn_v",
                 "drain_i_a",
                 "supply_i_a",
+                "device_flavor",
+                "device_row",
+                "device_col",
+                "device_chip",
             ]
         )
         for p in points:
@@ -351,6 +379,67 @@ def write_routine_measurements_csv(path: str | Path, points: list[RoutineMeasure
                     p.vgxn_v,
                     p.drain_i_a,
                     p.supply_i_a,
+                    p.device_flavor,
+                    p.device_row,
+                    p.device_col,
+                    p.device_chip,
+                ]
+            )
+
+
+def write_routine_measurements_lbl_csv(path: str | Path, points: list[RoutineMeasurement]) -> None:
+    """Write measurements in the LBL column layout.
+
+    Columns match the LBL reference data exactly:
+    ``flavor, Row_idx, Col_idx, Flavor_name, w, l, nf, vg, vd, Vds_meas_V, id,
+    id_2, time_s``. The ``flavor`` column is 0-based (LBL convention), while the
+    stored ``device_flavor`` is the 1-based value sent to the Arduino.
+
+    The current data is kept RAW: ``id`` is the raw drain current and ``id_2`` is
+    the raw supply current (empty when not sampled on that point). Any baseline
+    subtraction is a display-only concern and is never applied here.
+    """
+    from iv_measure.device_geometry import lookup_geometry
+
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(
+            [
+                "flavor",
+                "Row_idx",
+                "Col_idx",
+                "Flavor_name",
+                "w",
+                "l",
+                "nf",
+                "vg",
+                "vd",
+                "Vds_meas_V",
+                "id",
+                "id_2",
+                "time_s",
+            ]
+        )
+        for p in points:
+            geom = lookup_geometry(p.device_flavor, p.device_row, p.device_col)
+            writer.writerow(
+                [
+                    geom.flavor_0based if geom.flavor_0based is not None else "",
+                    p.device_row if p.device_row is not None else "",
+                    p.device_col if p.device_col is not None else "",
+                    geom.flavor_name if geom.flavor_name is not None else "",
+                    geom.width_m if geom.width_m is not None else "",
+                    geom.length_m if geom.length_m is not None else "",
+                    geom.nf if geom.nf is not None else "",
+                    p.vg_v,
+                    p.vd_v,
+                    p.vd_v,  # Vds_meas_V: no separate readback; use the setpoint.
+                    p.drain_i_a,
+                    p.supply_i_a if p.supply_i_a is not None else "",
+                    p.time_s if p.time_s is not None else "",
                 ]
             )
 
@@ -738,8 +827,12 @@ def _open_device_pool(
     drain = _get_or_open(config.drain_source)
     bulk = _get_or_open(config.bulk_source) if config.bulk_source else None
 
-    # Pre-open any additional quantity sources so the pool is complete.
-    for source_cfg in config.quantity_sources.values():
+    # Pre-open any additional quantity sources so the pool is complete, EXCEPT
+    # manual quantities (vgxp/vgxn): their backing instrument (BK 9132C) must
+    # never be opened/driven by software, so we skip it entirely here.
+    for quantity, source_cfg in config.quantity_sources.items():
+        if quantity in MANUAL_QUANTITIES:
+            continue
         _get_or_open(source_cfg)
 
     return device_pool, gate, drain, bulk
@@ -757,6 +850,10 @@ def _build_quantity_controls(
     # Use quantity_sources first so each quantity keeps its own channel-specific set command.
     # This is critical when multiple quantities share one physical instrument/port.
     for quantity, source_cfg in config.quantity_sources.items():
+        # Manual quantities (vgxp/vgxn) are never software-controlled: do not
+        # create a control entry so no SCPI is ever sent to set/ramp them.
+        if quantity in MANUAL_QUANTITIES:
+            continue
         key = _device_key(source_cfg)
         device = device_pool.get(key)
         if device is None:
