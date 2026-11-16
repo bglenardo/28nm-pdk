@@ -1,0 +1,178 @@
+2026-11-02 15:44:21  Watcher started. Waiting for the NA Vd-sweep run to begin...
+2026-11-02 23:34:19  NA Vd-sweep run detected. Waiting for it to complete...
+2026-11-03 00:32:12  NA Vd-sweep run finished. Grace period before starting the Vg sweep.
+2026-11-03 00:32:22  Starting Vg sweep -> data/array_scan_board1_chip2_vg_sweep_settle0p1_full_run2.csv
+Skipping manual supply rail keithley_e3631a_b P6V = 0.900 V
+Skipping manual supply rail keithley_e3631a_b P25V = 1.800 V
+Device-array scan: 33 device(s) x 1 routine(s) = 33 acquisition(s).
+Press Ctrl+C at any time to stop gracefully; data collected so far is kept.
+
+=== Device flavor=1 row=0 col=0 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[1/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=1 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[2/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=2 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[3/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=3 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[4/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=4 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[5/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=5 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[6/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=6 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[7/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=7 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[8/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=8 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[9/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=9 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[10/33] Running routine index 1 ...
+
+=== Device flavor=1 row=0 col=10 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[11/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=0 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[12/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=1 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[13/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=2 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[14/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=3 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[15/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=4 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[16/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=5 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[17/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=6 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[18/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=7 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[19/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=8 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[20/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=9 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=677
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[21/33] Running routine index 1 ...
+
+=== Device flavor=1 row=1 col=10 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[22/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=0 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[23/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=1 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[24/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=2 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[25/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=3 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[26/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=4 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[27/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=5 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[28/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=6 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[29/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=7 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[30/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=8 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[31/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=9 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[32/33] Running routine index 1 ...
+
+=== Device flavor=1 row=2 col=10 chip=2 ===
+Scan-chain VERIFY: passed=1 mismatch=0 sout_highs=4 raw_max=676
+Arduino selector NANO_R4 on COM11: ack='SEL_DONE'
+[33/33] Running routine index 1 ...
+
+Device-array scan complete: 9900 total points collected in 1914.9 s.
+Saved: data/array_scan_board1_chip2_vg_sweep_settle0p1_full_run2.csv
+2026-11-03 01:04:19  Vg sweep command returned (exit code 0).
+2026-11-03 01:04:19  Watcher done.

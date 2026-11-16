@@ -49,6 +49,7 @@ instruments:
     # parity + 2 stop bits (verified by scanning: only 9600 7E2 returns a clean
     # "HEWLETT-PACKARD,34401A,...". 8N1 garbled every byte -> SCPI parse errors
     # and the beep/stall we were chasing). Match the meter exactly.
+    supply_rail: "0.9V"
     timeout_s: 3.0
     bytesize: 7
     parity: "E"
@@ -71,7 +72,40 @@ instruments:
       - "SAMP:COUN 1"
     measure_current_cmd: "READ?"
     current_meter: true
-    sample_every_n_points: 10
+    # Supply-current logging disabled 2026-11-11: the 0.9/1.8 V rail currents are
+    # extremely consistent device-to-device, so skip them to speed up the scan.
+    # 0 => _read_supply_current returns None (Isupply_0V9 column stays blank).
+    sample_every_n_points: 0
+
+  agilent34401a_1v8:
+    type: HP34401A
+    port: COM5
+    baudrate: 9600
+    # Second 34401A (Agilent-branded, same SCPI as the HP unit) that monitors
+    # the current through the 1.8 V supply rail, in series on the 1.8 V line.
+    # Verified on COM5 via *IDN? -> "HEWLETT-PACKARD,34401A,..." at 9600 7E2.
+    # Its reading is written to the CSV ``Isupply_1V8`` column.
+    supply_rail: "1.8V"
+    timeout_s: 3.0
+    bytesize: 7
+    parity: "E"
+    stopbits: 2
+    read_termination: "\n"
+    write_termination: "\n"
+    init_commands:
+      - "SYST:REM"
+      - "*CLS"
+      - "SYST:BEEP:STAT OFF"
+      - "CONF:CURR:DC DEF"
+      - "SENS:CURR:DC:NPLC 1"
+      - "TRIG:SOUR IMM"
+      - "TRIG:COUN 1"
+      - "SAMP:COUN 1"
+    measure_current_cmd: "READ?"
+    current_meter: true
+    # Supply-current logging disabled 2026-11-11 (see note on the 0.9 V meter).
+    # 0 => _read_supply_current returns None (Isupply_1V8 column stays blank).
+    sample_every_n_points: 0
 
   arduino_device_switch:
     type: Arduino

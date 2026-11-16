@@ -1,0 +1,5 @@
+Measurement              , Parameter to sweep, Sweep Start, Sweep Stop, Num Sweep Points, Sweep Stride, Parameter to Step, Step Start, Step Stop, Num Step Points, Step Stride, Vg Init, Vb Init, Vd Init, Vs Init, vgxp Init, vgxn Init, 
+Output WO Bulk           , Vd                , 0.         ,       0.9,               30,            2, Vg               , 0.0       ,       0.9,               10,           3,       0, 0      ,    0   ,       0,      1.0,       0.1, 
+Accumulation to Inversion, Vg                , 0          ,       0.9 ,              30,            2, Vd               , 0.0     ,       0.9,               10,           3,       0, 0      ,    0.,       0,      1.0,       0.1, 
+Vg Sweep Vds p0p05       , Vg                , 0          ,       0.9 ,              30,            2, Vd               , 0.05    ,       0.05,              1,           1,       0, 0      ,    0.05,       0,      1.0,       0.1, 
+Vg Sweep Vds m0p05       , Vg                , 0          ,       0.9 ,              30,            2, Vd               , 0.85    ,       0.85,              1,           1,       0, 0      ,    0.85,       0,      1.0,       0.1, 

@@ -5,6 +5,7 @@ data/*.csv
 
 # Generated plots -- keep images out of the repo going forward.
 *.png
+plots/
 
 # Raw reference measurement data -- never commit (keep off GitHub).
 **/Will reference data*/

@@ -34,6 +34,8 @@ class RoutineSpec:
     step_start: float
     step_stop: float
     step_points: int
+    sweep_stride: int
+    step_stride: int
     vg_init: float
     vb_init: float
     vd_init: float
@@ -131,6 +133,8 @@ def load_routines_csv(path: str | Path) -> list[RoutineSpec]:
                     step_start=_to_float(row, "Step Start"),
                     step_stop=_to_float(row, "Step Stop"),
                     step_points=_to_int(row, "Num Step Points"),
+                    sweep_stride=_to_int_optional(row, "Sweep Stride", 1),
+                    step_stride=_to_int_optional(row, "Step Stride", 1),
                     vg_init=_to_float(row, "Vg Init"),
                     vb_init=_to_float(row, "Vb Init"),
                     vd_init=_to_float(row, "Vd Init"),
@@ -155,13 +159,14 @@ def run_routines_from_csv(
     results: list[RoutineMeasurement] = []
 
     device_pool, gate, drain, bulk = _open_device_pool(config)
-    current_meter = _open_current_meter(config)
+    current_meter = _open_current_meter(config.current_meter)
+    current_meter_1v8 = _open_current_meter(config.current_meter_1v8)
     controls = _build_quantity_controls(config, gate, drain, bulk, device_pool)
 
     try:
         for routine in routines:
-            step_values = linear_points(routine.step_start, routine.step_stop, routine.step_points)
-            sweep_values = linear_points(routine.sweep_start, routine.sweep_stop, routine.sweep_points)
+            step_values = linear_points(routine.step_start, routine.step_stop, routine.step_points)[::routine.step_stride]
+            sweep_values = linear_points(routine.sweep_start, routine.sweep_stop, routine.sweep_points)[::routine.sweep_stride]
             init_biases = {
                 "Vg": routine.vg_init,
                 "Vd": routine.vd_init,
@@ -188,6 +193,7 @@ def run_routines_from_csv(
                     time.sleep(config.sweep.settle_s)
                     drain_i = _measure_current_a(drain)
                     supply_i = _read_supply_current(current_meter, results, config.sample_every_n_points)
+                    supply_i_1v8 = _read_supply_current(current_meter_1v8, results, config.sample_every_n_points)
 
                     measurement = RoutineMeasurement(
                         routine=routine.name,
@@ -203,6 +209,7 @@ def run_routines_from_csv(
                         vgxn_v=biases["vgxn"],
                         drain_i_a=drain_i,
                         supply_i_a=supply_i,
+                        supply_i_1v8_a=supply_i_1v8,
                         time_s=time.time(),
                     )
                     results.append(measurement)
@@ -217,6 +224,8 @@ def run_routines_from_csv(
             device.close()
         if current_meter is not None:
             current_meter.close()
+        if current_meter_1v8 is not None:
+            current_meter_1v8.close()
 
     return results
 
@@ -240,7 +249,8 @@ def run_single_routine_from_csv(
         raise ValueError("ids_settle_s must be >= 0")
 
     device_pool, gate, drain, bulk = _open_device_pool(config)
-    current_meter = _open_current_meter(config)
+    current_meter = _open_current_meter(config.current_meter)
+    current_meter_1v8 = _open_current_meter(config.current_meter_1v8)
     controls = _build_quantity_controls(config, gate, drain, bulk, device_pool)
     current_biases: dict[str, float] = {}
 
@@ -269,8 +279,8 @@ def run_single_routine_from_csv(
             except EOFError:
                 print("No interactive stdin available; proceeding without confirmation pause.")
 
-        step_values = linear_points(selected_routine.step_start, selected_routine.step_stop, selected_routine.step_points)
-        sweep_values = linear_points(selected_routine.sweep_start, selected_routine.sweep_stop, selected_routine.sweep_points)
+        step_values = linear_points(selected_routine.step_start, selected_routine.step_stop, selected_routine.step_points)[::selected_routine.step_stride]
+        sweep_values = linear_points(selected_routine.sweep_start, selected_routine.sweep_stop, selected_routine.sweep_points)[::selected_routine.sweep_stride]
 
         for step_value in step_values:
             step_biases = dict(init_biases)
@@ -289,6 +299,7 @@ def run_single_routine_from_csv(
                 time.sleep(effective_ids_settle_s)
                 drain_i = _measure_current_a(drain)
                 supply_i = _read_supply_current(current_meter, results, config.sample_every_n_points)
+                supply_i_1v8 = _read_supply_current(current_meter_1v8, results, config.sample_every_n_points)
 
                 measurement = RoutineMeasurement(
                     routine=selected_routine.name,
@@ -304,6 +315,7 @@ def run_single_routine_from_csv(
                     vgxn_v=biases["vgxn"],
                     drain_i_a=drain_i,
                     supply_i_a=supply_i,
+                    supply_i_1v8_a=supply_i_1v8,
                     time_s=time.time(),
                 )
                 results.append(measurement)
@@ -318,6 +330,8 @@ def run_single_routine_from_csv(
             device.close()
         if current_meter is not None:
             current_meter.close()
+        if current_meter_1v8 is not None:
+            current_meter_1v8.close()
 
     return selected_routine, results
 
@@ -495,6 +509,13 @@ def _to_int(row: dict[str, str], key: str) -> int:
     return int(value)
 
 
+def _to_int_optional(row: dict[str, str], key: str, default: int) -> int:
+    value = row.get(key)
+    if value is None or value.strip() == "":
+        return default
+    return int(value)
+
+
 def _set_voltage(device: SerialInstrument, voltage_v: float) -> None:
     device.send_scpi(device.config.set_voltage_cmd.format(value=voltage_v))
 
@@ -596,11 +617,11 @@ def _clear_status(device: SerialInstrument) -> None:
         pass
 
 
-def _open_current_meter(config: ProjectConfig) -> SerialInstrument | None:
-    if config.current_meter is None:
+def _open_current_meter(meter_cfg: SerialDeviceConfig | None) -> SerialInstrument | None:
+    if meter_cfg is None:
         return None
 
-    device = SerialInstrument(config.current_meter)
+    device = SerialInstrument(meter_cfg)
     device.open()
     # Configure the meter ONCE here (e.g. CONF:CURR:DC, fixed NPLC, TRIG:SOUR IMM)
     # so each per-point read is a fast READ?/FETCh? instead of a full MEAS? that

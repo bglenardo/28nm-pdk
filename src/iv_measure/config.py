@@ -46,6 +46,7 @@ class ProjectConfig:
     bulk_source: SerialDeviceConfig | None
     quantity_sources: dict[str, SerialDeviceConfig]
     current_meter: SerialDeviceConfig | None
+    current_meter_1v8: SerialDeviceConfig | None
     sample_every_n_points: int
     sweep: SweepConfig
 
@@ -67,7 +68,7 @@ def load_project_config(path: str | Path) -> ProjectConfig:
         raise ValueError("Config must contain an 'instruments' mapping")
 
     quantity_sources = _collect_quantity_sources(instruments)
-    current_meter = _resolve_optional_current_meter(instruments)
+    current_meter, current_meter_1v8 = _resolve_current_meters(instruments)
     sample_every_n_points = current_meter.sample_every_n_points if current_meter is not None else _sample_every_n_points(raw)
 
     assignments = raw.get("assignments")
@@ -104,6 +105,7 @@ def load_project_config(path: str | Path) -> ProjectConfig:
         bulk_source=bulk,
         quantity_sources=quantity_sources,
         current_meter=current_meter,
+        current_meter_1v8=current_meter_1v8,
         sample_every_n_points=sample_every_n_points,
         sweep=sweep_cfg,
     )
@@ -312,24 +314,58 @@ def _collect_quantity_sources(instruments: dict[str, Any]) -> dict[str, SerialDe
     return sources
 
 
-def _resolve_optional_current_meter(instruments: dict[str, Any]) -> SerialDeviceConfig | None:
+def _is_current_meter_entry(raw: dict[str, Any]) -> bool:
+    type_name = str(raw.get("type", "")).strip().upper()
+    return (
+        bool(raw.get("current_meter", False))
+        or str(raw.get("role", "")).strip().lower() in {"current_meter", "supply_current", "power_supply_current"}
+        or str(raw.get("measurement", "")).strip().lower() in {"current_meter", "supply_current", "power_supply_current"}
+        or type_name in {"HP34401A", "34401A", "AGILENT34401A", "AGILENT_34401A"}
+    )
+
+
+def _supply_rail_token(raw: dict[str, Any]) -> str:
+    """Normalize the optional ``supply_rail`` tag to ``'0v9'`` / ``'1v8'`` / ``''``."""
+    token = str(raw.get("supply_rail", raw.get("rail", ""))).strip().lower().replace(" ", "")
+    if token in {"1.8v", "1v8", "1800mv", "1.8"}:
+        return "1v8"
+    if token in {"0.9v", "0v9", "900mv", "0.9"}:
+        return "0v9"
+    return ""
+
+
+def _resolve_current_meters(
+    instruments: dict[str, Any],
+) -> tuple[SerialDeviceConfig | None, SerialDeviceConfig | None]:
+    """Resolve up to two supply-current meters.
+
+    Returns ``(primary, meter_1v8)`` where ``primary`` is the 0.9 V-rail meter
+    (or any untagged current meter, for backward compatibility) and
+    ``meter_1v8`` is the meter tagged ``supply_rail: "1.8V"``. Meters are matched
+    by the optional ``supply_rail`` tag; an untagged current meter falls into the
+    primary slot so existing single-meter configs keep working.
+    """
+    primary: SerialDeviceConfig | None = None
+    meter_1v8: SerialDeviceConfig | None = None
     for instrument_name, raw in instruments.items():
         if not isinstance(raw, dict):
             continue
-
-        type_name = str(raw.get("type", "")).strip().upper()
-        is_current_meter = (
-            bool(raw.get("current_meter", False))
-            or str(raw.get("role", "")).strip().lower() in {"current_meter", "supply_current", "power_supply_current"}
-            or str(raw.get("measurement", "")).strip().lower() in {"current_meter", "supply_current", "power_supply_current"}
-            or type_name in {"HP34401A", "34401A", "AGILENT34401A", "AGILENT_34401A"}
-        )
-        if not is_current_meter:
+        if not _is_current_meter_entry(raw):
             continue
 
-        return _parse_hp34401a(instrument_name, raw)
+        cfg = _parse_hp34401a(instrument_name, raw)
+        if _supply_rail_token(raw) == "1v8":
+            if meter_1v8 is None:
+                meter_1v8 = cfg
+        elif primary is None:
+            primary = cfg
 
-    return None
+    return primary, meter_1v8
+
+
+def _resolve_optional_current_meter(instruments: dict[str, Any]) -> SerialDeviceConfig | None:
+    primary, _ = _resolve_current_meters(instruments)
+    return primary
 
 
 def _sample_every_n_points(raw: dict[str, Any]) -> int:
