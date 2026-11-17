@@ -16,9 +16,14 @@
 #
 # Resumable: a flavor whose CSV already holds all expected devices is skipped; a
 # partial file is re-run from scratch (scan script overwrites from row 0).
+#
+# Usage: .\pmos_chip1_295K.ps1 [-Board 1] [-Chip 1]   (defaults = board 1 / chip 1)
+
+param([int]$Board = 1, [int]$Chip = 1)
 
 $ErrorActionPreference = "Stop"
-$log = "data/pmos_chip1_295K.log"
+$tag = if ($Board -eq 1) { "chip$Chip" } else { "board${Board}_chip$Chip" }
+$log = "data/pmos_${tag}_295K.log"
 function Log($msg) {
     $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
     $line | Tee-Object -FilePath $log -Append
@@ -29,14 +34,15 @@ $routines      = "0,1,3"
 $settle        = 0.1
 $rowsPerDevice = 135  # 60 (Output) + 60 (Transfer) + 15 (Vg @ Vds-0.05)
 
+$prefix = "data/array_scan_board${Board}_chip${Chip}"
 $jobs = @(
-    @{ cli = 7;  name = "PMOS_ULVT"; out = "data/array_scan_board1_chip1_PMOS_ULVT_295K.csv"; expectedDevices = 150 },
-    @{ cli = 8;  name = "PMOS_LVT";  out = "data/array_scan_board1_chip1_PMOS_LVT_295K.csv";  expectedDevices = 150 },
-    @{ cli = 9;  name = "PMOS_MID";  out = "data/array_scan_board1_chip1_PMOS_MID_295K.csv";  expectedDevices = 150 },
-    @{ cli = 10; name = "PMOS_HVT";  out = "data/array_scan_board1_chip1_PMOS_HVT_295K.csv";  expectedDevices = 150 }
+    @{ cli = 7;  name = "PMOS_ULVT"; out = "${prefix}_PMOS_ULVT_295K.csv"; expectedDevices = 150 },
+    @{ cli = 8;  name = "PMOS_LVT";  out = "${prefix}_PMOS_LVT_295K.csv";  expectedDevices = 150 },
+    @{ cli = 9;  name = "PMOS_MID";  out = "${prefix}_PMOS_MID_295K.csv";  expectedDevices = 150 },
+    @{ cli = 10; name = "PMOS_HVT";  out = "${prefix}_PMOS_HVT_295K.csv";  expectedDevices = 150 }
 )
 
-Log "PMOS chip-1 room-temp (295 K) reduced-grid scan starting (routines $routines, 135 pts/device)."
+Log "PMOS board-$Board chip-$Chip room-temp (295 K) reduced-grid scan starting (routines $routines, 135 pts/device)."
 
 foreach ($j in $jobs) {
     if (Test-Path $j.out) {
@@ -49,14 +55,14 @@ foreach ($j in $jobs) {
         Log "$($j.name) partial ($devicesDone/$($j.expectedDevices)); re-running from scratch."
     }
 
-    Log "=== $($j.name) (cli=$($j.cli)) chip1 routines=$routines rows=0-5 cols=0-24 -> $($j.out) ==="
+    Log "=== $($j.name) (cli=$($j.cli)) board$Board chip$Chip routines=$routines rows=0-5 cols=0-24 -> $($j.out) ==="
     python run_routine_automated_scan.py `
         --routines-csv $routinesCsv `
         --device-flavors $($j.cli) `
         --device-rows 0-5 `
         --device-cols 0-24 `
-        --device-chip 1 `
-        --board 1 `
+        --device-chip $Chip `
+        --board $Board `
         --routine-indices $routines `
         --ids-settle-s $settle `
         --output-csv $j.out
@@ -64,14 +70,14 @@ foreach ($j in $jobs) {
     Log "$($j.name) finished (exit code $code)."
     if ($code -eq 130) {
         Log "Interrupted (Ctrl+C). Stopping; remaining work not started."
-        Log "PMOS chip-1 295 K scan halted."
+        Log "PMOS board-$Board chip-$Chip 295 K scan halted."
         exit 130
     }
     if ($code -ne 0) {
         Log "Non-zero exit for $($j.name); stopping to avoid cascading failures."
-        Log "PMOS chip-1 295 K scan halted."
+        Log "PMOS board-$Board chip-$Chip 295 K scan halted."
         exit $code
     }
 }
 
-Log "PMOS chip-1 room-temp (295 K) reduced-grid scan done (all 4 flavors)."
+Log "PMOS board-$Board chip-$Chip room-temp (295 K) reduced-grid scan done (all 4 flavors)."
