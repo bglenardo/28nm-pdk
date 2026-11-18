@@ -28,9 +28,14 @@
 #
 # Resumable: a flavor whose CSV already holds all expected devices is skipped; a
 # partial file is re-run from scratch (scan script overwrites from row 0).
+#
+# Usage: .\nmos_chip1_295K.ps1 [-Board 1] [-Chip 1]   (defaults = board 1 / chip 1)
+
+param([int]$Board = 1, [int]$Chip = 1)
 
 $ErrorActionPreference = "Stop"
-$log = "data/nmos_chip1_295K.log"
+$tag = if ($Board -eq 1) { "chip$Chip" } else { "board${Board}_chip$Chip" }
+$log = "data/nmos_${tag}_295K.log"
 function Log($msg) {
     $line = "{0}  {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg
     $line | Tee-Object -FilePath $log -Append
@@ -41,16 +46,17 @@ $routines      = "0,1,2"
 $settle        = 0.1
 $rowsPerDevice = 135  # 60 (Output) + 60 (Transfer) + 15 (Vg @ Vds+0.05)
 
+$prefix = "data/array_scan_board${Board}_chip${Chip}"
 $jobs = @(
-    @{ cli = 1; name = "NMOS_LVT";  rows = "0-5"; cols = "0-24"; out = "data/array_scan_board1_chip1_NMOS_LVT_295K.csv";  expectedDevices = 150 },
-    @{ cli = 2; name = "NMOS_HVT";  rows = "0-5"; cols = "0-24"; out = "data/array_scan_board1_chip1_NMOS_HVT_295K.csv";  expectedDevices = 150 },
-    @{ cli = 3; name = "NMOS_MID";  rows = "0-5"; cols = "0-24"; out = "data/array_scan_board1_chip1_NMOS_MID_295K.csv";  expectedDevices = 150 },
-    @{ cli = 4; name = "NMOS_NA";   rows = "0-5"; cols = "0-13"; out = "data/array_scan_board1_chip1_NMOS_NA_295K.csv";   expectedDevices = 84  },
-    @{ cli = 5; name = "NMOS_ULVT"; rows = "0-5"; cols = "0-24"; out = "data/array_scan_board1_chip1_NMOS_ULVT_295K.csv"; expectedDevices = 150 },
-    @{ cli = 6; name = "NMOS_DNW";  rows = "0-5"; cols = "0-24"; out = "data/array_scan_board1_chip1_NMOS_DNW_295K.csv";  expectedDevices = 150 }
+    @{ cli = 1; name = "NMOS_LVT";  rows = "0-5"; cols = "0-24"; out = "${prefix}_NMOS_LVT_295K.csv";  expectedDevices = 150 },
+    @{ cli = 2; name = "NMOS_HVT";  rows = "0-5"; cols = "0-24"; out = "${prefix}_NMOS_HVT_295K.csv";  expectedDevices = 150 },
+    @{ cli = 3; name = "NMOS_MID";  rows = "0-5"; cols = "0-24"; out = "${prefix}_NMOS_MID_295K.csv";  expectedDevices = 150 },
+    @{ cli = 4; name = "NMOS_NA";   rows = "0-5"; cols = "0-13"; out = "${prefix}_NMOS_NA_295K.csv";   expectedDevices = 84  },
+    @{ cli = 5; name = "NMOS_ULVT"; rows = "0-5"; cols = "0-24"; out = "${prefix}_NMOS_ULVT_295K.csv"; expectedDevices = 150 },
+    @{ cli = 6; name = "NMOS_DNW";  rows = "0-5"; cols = "0-24"; out = "${prefix}_NMOS_DNW_295K.csv";  expectedDevices = 150 }
 )
 
-Log "NMOS chip-1 room-temp (295 K) reduced-grid scan starting (routines $routines, 135 pts/device)."
+Log "NMOS board-$Board chip-$Chip room-temp (295 K) reduced-grid scan starting (routines $routines, 135 pts/device)."
 
 foreach ($j in $jobs) {
     if (Test-Path $j.out) {
@@ -63,14 +69,14 @@ foreach ($j in $jobs) {
         Log "$($j.name) partial ($devicesDone/$($j.expectedDevices)); re-running from scratch."
     }
 
-    Log "=== $($j.name) (cli=$($j.cli)) chip1 routines=$routines rows=$($j.rows) cols=$($j.cols) -> $($j.out) ==="
+    Log "=== $($j.name) (cli=$($j.cli)) board$Board chip$Chip routines=$routines rows=$($j.rows) cols=$($j.cols) -> $($j.out) ==="
     python run_routine_automated_scan.py `
         --routines-csv $routinesCsv `
         --device-flavors $($j.cli) `
         --device-rows $($j.rows) `
         --device-cols $($j.cols) `
-        --device-chip 1 `
-        --board 1 `
+        --device-chip $Chip `
+        --board $Board `
         --routine-indices $routines `
         --ids-settle-s $settle `
         --output-csv $j.out
@@ -78,14 +84,14 @@ foreach ($j in $jobs) {
     Log "$($j.name) finished (exit code $code)."
     if ($code -eq 130) {
         Log "Interrupted (Ctrl+C). Stopping; remaining work not started."
-        Log "NMOS chip-1 295 K scan halted."
+        Log "NMOS board-$Board chip-$Chip 295 K scan halted."
         exit 130
     }
     if ($code -ne 0) {
         Log "Non-zero exit for $($j.name); stopping to avoid cascading failures."
-        Log "NMOS chip-1 295 K scan halted."
+        Log "NMOS board-$Board chip-$Chip 295 K scan halted."
         exit $code
     }
 }
 
-Log "NMOS chip-1 room-temp (295 K) reduced-grid scan done (all 6 flavors)."
+Log "NMOS board-$Board chip-$Chip room-temp (295 K) reduced-grid scan done (all 6 flavors)."
